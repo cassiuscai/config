@@ -221,8 +221,15 @@ detect_os() {
 
 detect_codename() {
   # Debian release codename: prefer VERSION_CODENAME, fall back to ID mapping.
-  local codename="${VERSION_CODENAME:-}"
-  local version_id="${VERSION_ID:-}"
+  # Read /etc/os-release directly: detect_os() sources it inside a subshell,
+  # so its variables never survive into this function.
+  local codename="" version_id="" os_release="/etc/os-release"
+  if [[ -f "${os_release}" ]]; then
+    # shellcheck disable=SC1091
+    . "${os_release}"
+    codename="${VERSION_CODENAME:-}"
+    version_id="${VERSION_ID:-}"
+  fi
   if [[ -n "${codename}" ]]; then
     printf '%s\n' "${codename}"
     return 0
@@ -232,6 +239,31 @@ detect_codename() {
     12*) printf '%s\n' 'bookworm' ;;
     *)   printf '%s\n' ''         ;;
   esac
+}
+
+# Grant <user> full sudo via an isolated sudoers.d rule. Unlike relying on the
+# sudo/wheel group rule in /etc/sudoers, this cannot silently break if that
+# group line is missing or malformed. The rule is validated with visudo before
+# being installed.
+grant_user_sudo() {
+  local user="$1"
+  local rule_file="/etc/sudoers.d/${user}"
+  local rule="${user} ALL=(ALL:ALL) ALL"
+  if [[ -f "${rule_file}" ]] && grep -qF "${rule}" "${rule_file}"; then
+    say "already configured: ${rule_file}"
+    return 0
+  fi
+  printf '%s\n' "${rule}" > "${rule_file}.new"
+  if command -v visudo >/dev/null 2>&1; then
+    if ! visudo -cf "${rule_file}.new" >/dev/null 2>&1; then
+      rm -f "${rule_file}.new"
+      die "refusing to write invalid sudoers rule for '${user}'"
+    fi
+  fi
+  mv -f "${rule_file}.new" "${rule_file}"
+  chown root:root "${rule_file}"
+  chmod 0440 "${rule_file}"
+  say "configured: ${rule_file}"
 }
 
 # --- debian (apt + Linuxbrew) ----------------------------------------------
@@ -256,10 +288,7 @@ platform_sudo_debian() {
     say "installing sudo ..."
     apt-get install -y sudo
   fi
-  if ! id -nG "${target_user}" | grep -qw sudo; then
-    say "granting sudo to '${target_user}' ..."
-    usermod -aG sudo "${target_user}"
-  fi
+  grant_user_sudo "${target_user}"
   say "sudo ready for '${target_user}'"
 }
 
