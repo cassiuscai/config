@@ -5,18 +5,19 @@ A single script that takes a fresh machine from stock to usable:
 - switches system package mirrors to **[USTC mirrors](https://mirrors.ustc.edu.cn)**
 - installs basic packages: `curl`, `git`, `htop`, `neovim`
 - sets up **Homebrew / Linuxbrew** with USTC mirrors
+- installs the **Nix** package manager (Linux: multi-user daemon, macOS: default)
 - bootstraps **sudo** for the target user (minimal installs)
 
 ## Supported platforms
 
-| Platform                     | Package manager       | Mirror                                          | Homebrew |
-|------------------------------|-----------------------|-------------------------------------------------|----------|
-| Debian 12 (bookworm), 13 (trixie) | `apt` (deb822)   | `mirrors.ustc.edu.cn/debian`                    | Linuxbrew at `/home/linuxbrew/.linuxbrew` |
-| macOS (Intel & Apple Silicon) | Homebrew             | `mirrors.ustc.edu.cn` (brew / core / cask / bottles) | Native Homebrew |
-| FreeBSD 14+                  | `pkg`                | `mirrors.ustc.edu.cn/freebsd-pkg`               | not supported — `pkg` covers packages |
+| Platform                     | Package manager       | Mirror                                          | Homebrew | Nix |
+|------------------------------|-----------------------|-------------------------------------------------|----------|-----|
+| Debian 12 (bookworm), 13 (trixie) | `apt` (deb822)   | `mirrors.ustc.edu.cn/debian`                    | Linuxbrew at `/home/linuxbrew/.linuxbrew` | multi-user daemon |
+| macOS (Intel & Apple Silicon) | Homebrew             | `mirrors.ustc.edu.cn` (brew / core / cask / bottles) | Native Homebrew | multi-user daemon |
+| FreeBSD 14+                  | `pkg`                | `mirrors.ustc.edu.cn/freebsd-pkg`               | not supported — `pkg` covers packages | not supported |
 
-> **FreeBSD**: Homebrew/Linuxbrew does not support FreeBSD. The script keeps
-> FreeBSD on its native `pkg` manager and skips the brew step.
+> **FreeBSD**: Homebrew/Linuxbrew and Nix do not support FreeBSD. The script
+> keeps FreeBSD on its native `pkg` manager and skips both steps.
 
 ## Usage
 
@@ -43,16 +44,20 @@ That user gets sudo privileges and owns the Homebrew/Linuxbrew install.
 to `mirrors.ustc.edu.cn` for the detected release (trixie / bookworm),
 disables any legacy one-line `sources.list`, runs `apt-get update`, installs
 the basic packages, then installs Linuxbrew into `/home/linuxbrew` using the
-USTC `brew-install.sh`, with a profile at `/etc/profile.d/linuxbrew.sh`.
+USTC `brew-install.sh` (profile at `/etc/profile.d/linuxbrew.sh`), and finally
+installs Nix in multi-user daemon mode:
+`curl ... https://nixos.org/nix/install | sh -s -- --daemon`.
 
 **macOS** — writes the `HOMEBREW_*` USTC mirror exports into `~/.zprofile`,
 installs Homebrew (if missing) from the USTC installer, then
-`brew install curl git htop neovim`.
+`brew install curl git htop neovim`, and installs Nix with the official
+installer (defaults to the multi-user daemon via launchd; it may prompt for
+your sudo password).
 
 **FreeBSD** — configures `/usr/local/etc/pkg.conf` to use
 `mirrors.ustc.edu.cn/freebsd-pkg` (with `${ABI}` substitution), runs
 `pkg update -f`, installs the basic packages, installs `sudo` and adds the
-user to the `wheel` group.
+user to the `wheel` group. Homebrew and Nix are skipped (unsupported).
 
 ## Extending: add a platform
 
@@ -67,13 +72,14 @@ a new OS:
 
 2. Extend `detect_os()` to recognize it (usually via `/etc/os-release`).
 
-3. Implement the four step functions — a step may be a no-op returning 0:
+3. Implement the five step functions — a step may be a no-op returning 0:
 
    ```sh
    platform_sudo_arch()      { ... }   # ensure <user> has sudo access
    platform_mirror_arch()    { ... }   # switch mirrors; nonzero aborts the rest
    platform_packages_arch()  { ... }   # install ${BASIC_PACKAGES[@]}
    platform_brew_arch()      { ... }   # set up Homebrew, or a no-op
+   platform_nix_arch()       { ... }   # install Nix, or a no-op
    ```
 
 4. Only if the platform does **not** need root:
@@ -90,6 +96,8 @@ registry* section in `install.sh` for the full contract.
 
 - Homebrew refuses to run as root. If you install as root, run
   `sudo ./install.sh <non-root-user>` so that user owns the Homebrew install.
+- The macOS Nix installer may prompt for your sudo password interactively —
+  run the script in a terminal, not from a non-interactive context.
 - `apt-get update` / `pkg update` failures abort the remaining steps so you can
   fix network or keyring issues first.
 - Existing mirror configuration files are backed up with a timestamp

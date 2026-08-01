@@ -5,6 +5,7 @@
 #   * switches system package mirrors to USTC (mirrors.ustc.edu.cn)
 #   * installs basic packages (curl, git, htop, neovim)
 #   * sets up Homebrew / Linuxbrew with USTC mirrors
+#   * installs the Nix package manager (Linux: multi-user daemon; macOS: default)
 #   * bootstraps sudo for the target user (minimal installs)
 #
 # Supported platforms:
@@ -36,6 +37,8 @@ BREW_CASK_GIT_REMOTE='https://mirrors.ustc.edu.cn/homebrew-cask.git'
 BREW_BOTTLE_DOMAIN='https://mirrors.ustc.edu.cn/homebrew-bottles'
 BREW_API_DOMAIN='https://mirrors.ustc.edu.cn/homebrew-bottles/api'
 BREW_INSTALL_URL='https://mirrors.ustc.edu.cn/misc/brew-install.sh'
+
+NIX_INSTALL_URL='https://nixos.org/nix/install'
 
 # --- helpers ---------------------------------------------------------------
 
@@ -90,6 +93,11 @@ write_marked_block() {
   say "configured: ${file} (${marker})"
 }
 
+# Is the Nix package manager already installed? (multi-user installs live in /nix)
+nix_installed() {
+  [[ -x /nix/var/nix/profiles/default/bin/nix ]] || command -v nix >/dev/null 2>&1
+}
+
 resolve_target_user() {
   local arg_user="${1:-}"
   if [[ -n "${arg_user}" ]]; then
@@ -126,13 +134,14 @@ resolve_target_user() {
 # To add a platform:
 #   1. append its OS id to SUPPORTED_OS
 #   2. extend detect_os() to recognize it
-#   3. define the step functions (all four are required; a step may be a
+#   3. define the step functions (all five are required; a step may be a
 #      no-op that returns 0):
 #        platform_sudo_<os>      <user>   ensure the user has sudo access
 #        platform_mirror_<os>    <user>   switch package mirrors; return
 #                                         nonzero to abort the remaining steps
 #        platform_packages_<os>  <user>   install ${BASIC_PACKAGES[@]}
 #        platform_brew_<os>      <user>   set up Homebrew (or a no-op)
+#        platform_nix_<os>       <user>   install the Nix package manager (or a no-op)
 #   4. optionally define platform_requires_root_<os> if root is NOT required
 #      (the default is that root is required)
 #
@@ -353,6 +362,19 @@ EOF
   fi
 }
 
+platform_nix_debian() {
+  # Multi-user (daemon) install: sets up the nix-daemon service + nixbld users.
+  if nix_installed; then
+    say "Nix already installed — skipping"
+    return 0
+  fi
+  say "installing Nix (multi-user daemon) ..."
+  if ! curl --proto '=https' --tlsv1.2 -L "${NIX_INSTALL_URL}" | sh -s -- --daemon; then
+    die "Nix install failed — check the output above"
+  fi
+  say "done — Nix installed (multi-user); run 'nix-shell' from a fresh shell"
+}
+
 # --- macos (Homebrew) ------------------------------------------------------
 
 # Homebrew does not require root; run this script as your own (admin) user.
@@ -436,6 +458,20 @@ platform_brew_macos() {
   return 0
 }
 
+platform_nix_macos() {
+  # Official installer; defaults to the multi-user daemon (launchd). Run as the
+  # target user so the installer can prompt for their sudo password if needed.
+  if nix_installed; then
+    say "Nix already installed — skipping"
+    return 0
+  fi
+  say "installing Nix (macOS) ..."
+  if ! run_as_user "$1" /bin/bash -c "curl --proto '=https' --tlsv1.2 -L '${NIX_INSTALL_URL}' | sh"; then
+    die "Nix install failed — check the output above"
+  fi
+  say "done — Nix installed; run 'nix-shell' from a fresh shell"
+}
+
 # --- freebsd (pkg) ---------------------------------------------------------
 
 platform_sudo_freebsd() {
@@ -501,6 +537,11 @@ platform_brew_freebsd() {
   return 0
 }
 
+platform_nix_freebsd() {
+  warn "Nix does not officially support FreeBSD — skipping (use pkg instead)."
+  return 0
+}
+
 # --- main ------------------------------------------------------------------
 
 main() {
@@ -526,6 +567,7 @@ main() {
   if run_platform_step "${os}" mirror "${target_user}"; then
     run_platform_step "${os}" packages "${target_user}"
     run_platform_step "${os}" brew "${target_user}"
+    run_platform_step "${os}" nix "${target_user}"
   fi
 
   say "done — ${os} setup complete"
