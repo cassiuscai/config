@@ -1,4 +1,4 @@
-# Cassius — cross-platform setup installer
+# Cross-platform setup installer
 
 A single script that takes a fresh machine from stock to usable:
 
