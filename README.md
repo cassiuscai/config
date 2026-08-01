@@ -13,11 +13,15 @@ A single script that takes a fresh machine from stock to usable:
 
 No clone needed — pipe the script straight from GitHub:
 
-```sh
-# Debian / FreeBSD — run as root; <username> gets sudo + Homebrew + Nix
-curl -fsSL https://raw.githubusercontent.com/cassiuscai/config/master/install.sh | sudo bash -s -- <username>
+**Debian / FreeBSD** — run as root; `<username>` gets sudo + Homebrew + Nix:
 
-# macOS — run as your own (admin) user; no sudo needed
+```sh
+curl -fsSL https://raw.githubusercontent.com/cassiuscai/config/master/install.sh | sudo bash -s -- <username>
+```
+
+**macOS** — run as your own (admin) user; no sudo needed:
+
+```sh
 curl -fsSL https://raw.githubusercontent.com/cassiuscai/config/master/install.sh | bash
 ```
 
