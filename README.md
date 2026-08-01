@@ -6,6 +6,7 @@ A single script that takes a fresh machine from stock to usable:
 - installs basic packages: `curl`, `git`, `htop`, `neovim`
 - sets up **Homebrew / Linuxbrew** with USTC mirrors
 - installs the **Nix** package manager (Linux: multi-user daemon, macOS: default)
+- initializes an **ed25519 SSH key** for the target user (if missing)
 - bootstraps **sudo** for the target user (minimal installs)
 
 ## One-line install
@@ -70,7 +71,7 @@ installs Nix in multi-user daemon mode:
 
 **macOS** — writes the `HOMEBREW_*` USTC mirror exports into `~/.zprofile`,
 installs Homebrew (if missing) from the USTC installer, then
-`brew install curl git htop neovim`, and installs Nix with the official
+`brew install curl git htop neovim just`, and installs Nix with the official
 installer (defaults to the multi-user daemon via launchd; it may prompt for
 your sudo password).
 
@@ -78,6 +79,10 @@ your sudo password).
 `mirrors.ustc.edu.cn/freebsd-pkg` (with `${ABI}` substitution), runs
 `pkg update -f`, installs the basic packages, installs `sudo` and adds the
 user to the `wheel` group. Homebrew and Nix are skipped (unsupported).
+
+All three platforms run the same SSH step: if `~/.ssh/id_ed25519` doesn't
+exist, a passphrase-less ed25519 key is created for the target user, with no
+comment (email) embedded.
 
 ## Extending: add a platform
 
@@ -92,7 +97,7 @@ a new OS:
 
 2. Extend `detect_os()` to recognize it (usually via `/etc/os-release`).
 
-3. Implement the five step functions — a step may be a no-op returning 0:
+3. Implement the six step functions — a step may be a no-op returning 0:
 
    ```sh
    platform_sudo_arch()      { ... }   # ensure <user> has sudo access
@@ -100,6 +105,7 @@ a new OS:
    platform_packages_arch()  { ... }   # install ${BASIC_PACKAGES[@]}
    platform_brew_arch()      { ... }   # set up Homebrew, or a no-op
    platform_nix_arch()       { ... }   # install Nix, or a no-op
+   platform_ssh_arch()       { ... }   # init an SSH key, or a no-op
    ```
 
 4. Only if the platform does **not** need root:
@@ -118,6 +124,8 @@ registry* section in `install.sh` for the full contract.
   `sudo ./install.sh <non-root-user>` so that user owns the Homebrew install.
 - The macOS Nix installer may prompt for your sudo password interactively —
   run the script in a terminal, not from a non-interactive context.
+- The SSH key is created passphrase-less and with no email comment so the
+  bootstrap runs non-interactively; add a passphrase later with `ssh-keygen -p`.
 - `apt-get update` / `pkg update` failures abort the remaining steps so you can
   fix network or keyring issues first.
 - Existing mirror configuration files are backed up with a timestamp

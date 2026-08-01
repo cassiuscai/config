@@ -6,6 +6,7 @@
 #   * installs basic packages (curl, git, htop, neovim)
 #   * sets up Homebrew / Linuxbrew with USTC mirrors
 #   * installs the Nix package manager (Linux: multi-user daemon; macOS: default)
+#   * initializes an ed25519 SSH key for the target user (if missing)
 #   * bootstraps sudo for the target user (minimal installs)
 #
 # Supported platforms:
@@ -28,7 +29,7 @@ set -euo pipefail
 
 # --- shared config ---------------------------------------------------------
 
-BASIC_PACKAGES=(curl git htop neovim)
+BASIC_PACKAGES=(curl git htop neovim just)
 
 # USTC Homebrew mirrors (https://mirrors.ustc.edu.cn/help/)
 BREW_GIT_REMOTE='https://mirrors.ustc.edu.cn/brew.git'
@@ -98,6 +99,30 @@ nix_installed() {
   [[ -x /nix/var/nix/profiles/default/bin/nix ]] || command -v nix >/dev/null 2>&1
 }
 
+# Initialize an ed25519 SSH key for <user> if none exists. Passphrase-less so
+# the bootstrap runs non-interactively; add a passphrase later with
+# `ssh-keygen -p`. No comment (e.g. email) is embedded in the key.
+ensure_ssh_key() {
+  local user="$1"
+  local home key
+  home="$(user_home "${user}")"
+  key="${home}/.ssh/id_ed25519"
+  if [[ -f "${key}" ]]; then
+    say "SSH key exists at ${key}"
+    return 0
+  fi
+  say "creating SSH key ${key} ..."
+  if ! run_as_user "${user}" bash -c "mkdir -p \"${home}/.ssh\" && chmod 700 \"${home}/.ssh\" && ssh-keygen -t ed25519 -C '' -N '' -f \"${key}\""; then
+    die "failed to create SSH key — check the output above"
+  fi
+  say "done — SSH key ready at ${key}"
+}
+
+# SSH key init is identical on every platform — one shared implementation.
+platform_ssh_debian()  { ensure_ssh_key "$1"; }
+platform_ssh_macos()   { ensure_ssh_key "$1"; }
+platform_ssh_freebsd() { ensure_ssh_key "$1"; }
+
 resolve_target_user() {
   local arg_user="${1:-}"
   if [[ -n "${arg_user}" ]]; then
@@ -134,7 +159,7 @@ resolve_target_user() {
 # To add a platform:
 #   1. append its OS id to SUPPORTED_OS
 #   2. extend detect_os() to recognize it
-#   3. define the step functions (all five are required; a step may be a
+#   3. define the step functions (all six are required; a step may be a
 #      no-op that returns 0):
 #        platform_sudo_<os>      <user>   ensure the user has sudo access
 #        platform_mirror_<os>    <user>   switch package mirrors; return
@@ -142,6 +167,7 @@ resolve_target_user() {
 #        platform_packages_<os>  <user>   install ${BASIC_PACKAGES[@]}
 #        platform_brew_<os>      <user>   set up Homebrew (or a no-op)
 #        platform_nix_<os>       <user>   install the Nix package manager (or a no-op)
+#        platform_ssh_<os>       <user>   init an SSH key for the user (or a no-op)
 #   4. optionally define platform_requires_root_<os> if root is NOT required
 #      (the default is that root is required)
 #
@@ -561,6 +587,7 @@ main() {
 
   target_user="$(resolve_target_user "${1:-}")"
   run_platform_step "${os}" sudo "${target_user}"
+  run_platform_step "${os}" ssh "${target_user}"
 
   # The mirror step gates the rest: if mirror setup fails, abort rather than
   # installing packages from a broken repository state.
