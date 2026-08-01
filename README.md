@@ -8,6 +8,26 @@ A single script that takes a fresh machine from stock to usable:
 - installs the **Nix** package manager (Linux: multi-user daemon, macOS: default)
 - bootstraps **sudo** for the target user (minimal installs)
 
+## One-line install
+
+No clone needed — pipe the script straight from GitHub:
+
+```sh
+# Debian / FreeBSD — run as root; <username> gets sudo + Homebrew + Nix
+curl -fsSL https://raw.githubusercontent.com/cassiuscai/config/master/install.sh | sudo bash -s -- <username>
+
+# macOS — run as your own (admin) user; no sudo needed
+curl -fsSL https://raw.githubusercontent.com/cassiuscai/config/master/install.sh | bash
+```
+
+> The script uses bash features (arrays, `[[ ]]`), so pipe it to **`bash`** —
+> not `sh` (on Debian `sh` is dash and will fail).
+>
+> The username is optional: without one, the target user is resolved from
+> `$SUDO_USER` (when run via `sudo`) or the current user (macOS). The
+> interactive prompt only appears when running as root with no sudo context —
+> in that case a piped install can't prompt, so pass a username explicitly.
+
 ## Supported platforms
 
 | Platform                     | Package manager       | Mirror                                          | Homebrew | Nix |
@@ -19,7 +39,7 @@ A single script that takes a fresh machine from stock to usable:
 > **FreeBSD**: Homebrew/Linuxbrew and Nix do not support FreeBSD. The script
 > keeps FreeBSD on its native `pkg` manager and skips both steps.
 
-## Usage
+## From a local checkout
 
 ```sh
 # Debian / FreeBSD — run as root (directly, or via sudo)
