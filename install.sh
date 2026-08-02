@@ -45,6 +45,9 @@ BREW_BOTTLE_DOMAIN='https://mirrors.bfsu.edu.cn/homebrew-bottles'
 BREW_API_DOMAIN='https://mirrors.bfsu.edu.cn/homebrew-bottles/api'
 BREW_INSTALL_GIT='https://mirrors.bfsu.edu.cn/git/homebrew/install.git'
 BREW_INSTALL_FROM_API=1
+# Upstream fallback for the installer *script* only (mirror TLS has been
+# flaky from some networks) — brew's git/bottle/API mirrors stay on BFSU.
+BREW_INSTALL_URL='https://github.com/Homebrew/install/raw/HEAD/install.sh'
 
 NIX_INSTALL_URL='https://nixos.org/nix/install'
 
@@ -372,16 +375,25 @@ run_brew_as_user() {
     bash -c "$*"
 }
 
-# Clone the Homebrew installer into a user-owned temp dir; prints the repo
-# path. BFSU serves the installer as a git repo (no raw script URL), and
-# cloning beats "$(curl ...)" — which would swallow download failures.
+# Fetch the Homebrew installer into a user-owned temp dir; prints the repo
+# path. Prefers a BFSU git clone (mirrors the upstream repo layout); falls
+# back to the GitHub raw script when the mirror is unreachable. Errors are
+# not suppressed so a failed fetch is diagnosable.
 fetch_brew_installer() {
   local user="$1" dir
   dir="$(run_as_user "${user}" mktemp -d '/tmp/brew-install.XXXXXX')" \
     || die "failed to create a temp dir for the brew installer"
-  if ! run_as_user "${user}" git clone --depth=1 "${BREW_INSTALL_GIT}" "${dir}/install" >/dev/null 2>&1; then
+  if run_as_user "${user}" git clone --depth=1 "${BREW_INSTALL_GIT}" "${dir}/install.git"; then
+    if ! mv -f "${dir}/install.git/install.sh" "${dir}/install.sh" 2>/dev/null; then
+      rm -rf "${dir}"
+      die "cloned brew installer has no install.sh — check the output above"
+    fi
+    rm -rf "${dir}/install.git"
+  elif curl -fsSL "${BREW_INSTALL_URL}" -o "${dir}/install.sh"; then
+    warn "BFSU clone failed — fell back to ${BREW_INSTALL_URL}"
+  else
     rm -rf "${dir}"
-    die "failed to clone brew installer from ${BREW_INSTALL_GIT} — check the output above"
+    die "failed to fetch brew installer from ${BREW_INSTALL_GIT} or ${BREW_INSTALL_URL} — check the output above"
   fi
   printf '%s\n' "${dir}"
 }
