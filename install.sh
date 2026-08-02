@@ -4,6 +4,9 @@
 #
 #   * switches system package mirrors to USTC (mirrors.ustc.edu.cn)
 #   * installs basic packages (curl, git, htop, neovim)
+#   * sets up virtualization on headless servers (no desktop): libvirt/QEMU
+#     with KVM acceleration on Debian, bhyve/vm-bhyve on FreeBSD — macOS is
+#     skipped
 #   * sets up Homebrew / Linuxbrew with USTC mirrors
 #   * installs the Nix package manager (Linux: multi-user daemon; macOS: default)
 #   * initializes an ed25519 SSH key for the target user (if missing)
@@ -159,8 +162,8 @@ resolve_target_user() {
 # To add a platform:
 #   1. append its OS id to SUPPORTED_OS
 #   2. extend detect_os() to recognize it
-#   3. define the step functions (all six are required; a step may be a
-#      no-op that returns 0):
+#   3. define the step functions (all are required; a step may be a no-op
+#      that returns 0):
 #        platform_sudo_<os>      <user>   ensure the user has sudo access
 #        platform_mirror_<os>    <user>   switch package mirrors; return
 #                                         nonzero to abort the remaining steps
@@ -168,6 +171,9 @@ resolve_target_user() {
 #        platform_brew_<os>      <user>   set up Homebrew (or a no-op)
 #        platform_nix_<os>       <user>   install the Nix package manager (or a no-op)
 #        platform_ssh_<os>       <user>   init an SSH key for the user (or a no-op)
+#   Optional — define only for platforms that get a virtualization stack
+#   (deliberately omitted on macOS):
+#        platform_vmm_<os>       <user>   set up virsh/QEMU, vm-bhyve, etc.
 #   4. optionally define platform_requires_root_<os> if root is NOT required
 #      (the default is that root is required)
 #
@@ -430,6 +436,47 @@ platform_nix_debian() {
   say "done — Nix installed (multi-user); run 'nix-shell' from a fresh shell"
 }
 
+# Debian vmm: libvirt/QEMU with KVM acceleration where available. virsh
+# manages VMs, virt-install provisions them, qemu-utils ships qemu-img.
+# Headless server — no GUI tools (virt-manager / virt-viewer) are installed.
+VMM_PACKAGES_DEBIAN=(qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients virtinst)
+
+platform_vmm_debian() {
+  local target_user="$1"
+
+  say "installing libvirt/QEMU: ${VMM_PACKAGES_DEBIAN[*]}"
+  if ! apt-get install -y "${VMM_PACKAGES_DEBIAN[@]}"; then
+    die "failed to install virtualization packages — check the output above"
+  fi
+
+  # Group members manage VMs without root; takes effect on next login.
+  usermod -aG libvirt,kvm "${target_user}"
+  say "added '${target_user}' to groups: libvirt, kvm"
+
+  if [[ -e /dev/kvm ]]; then
+    say "KVM acceleration available (/dev/kvm)"
+  else
+    warn "/dev/kvm not found — VMs will run without KVM (software emulation)."
+    warn "Enable VT-x/AMD-V (BIOS) or nested virtualization to use KVM."
+  fi
+
+  # libvirtd must run (and start on boot) for virsh/virt-install to work.
+  if ! systemctl enable --now libvirtd; then
+    warn "failed to start libvirtd — run: systemctl enable --now libvirtd"
+  fi
+
+  # Start libvirt's default NAT network so virt-install works out of the box.
+  if virsh net-info default >/dev/null 2>&1; then
+    virsh net-start default >/dev/null 2>&1 || true
+    virsh net-autostart default >/dev/null 2>&1 || true
+    say "libvirt 'default' NAT network enabled"
+  else
+    warn "no libvirt 'default' network — check libvirt-daemon-system"
+  fi
+
+  say "virtualization ready — virsh / virt-install (KVM where available)"
+}
+
 # --- macos (Homebrew) ------------------------------------------------------
 
 # Homebrew does not require root; run this script as your own (admin) user.
@@ -597,6 +644,42 @@ platform_nix_freebsd() {
   return 0
 }
 
+# FreeBSD vmm: bhyve (the native hypervisor, KVM's counterpart) + vm-bhyve
+# for VM management. Headless server — manage VMs with the `vm` CLI via sudo.
+VMM_PACKAGES_FREEBSD=(vm-bhyve bhyve-firmware)
+
+platform_vmm_freebsd() {
+  say "installing bhyve/vm-bhyve: ${VMM_PACKAGES_FREEBSD[*]}"
+  if ! pkg install -y "${VMM_PACKAGES_FREEBSD[@]}"; then
+    die "failed to install virtualization packages — check the output above"
+  fi
+
+  # Load the vmm(4) hypervisor now, and at every boot via /boot/loader.conf.
+  if kldstat -m vmm >/dev/null 2>&1; then
+    say "vmm(4) hypervisor module already loaded"
+  elif kldload vmm 2>/dev/null; then
+    say "vmm(4) hypervisor module loaded"
+  else
+    warn "could not load vmm(4) — enable VT-x/AMD-V (BIOS) or nested virt"
+  fi
+  write_marked_block /boot/loader.conf 'cassius-bhyve' 'vmm_load="YES"'
+
+  # Bring tap(4) interfaces up as soon as they are opened (needed by bridges).
+  write_marked_block /etc/sysctl.conf 'cassius-bhyve' 'net.link.tap.up_on_open=1'
+  sysctl net.link.tap.up_on_open=1 2>/dev/null || true
+
+  # Enable the vm rc service and initialize the VM directory (/vm).
+  sysrc vm_enable="YES"
+  sysrc vm_dir="/vm"
+  if vm init; then
+    say "vm-bhyve initialized (vm_dir=/vm)"
+  else
+    warn "vm init failed — re-run it manually as root"
+  fi
+
+  say "virtualization ready — manage VMs with: sudo vm list / sudo vm create"
+}
+
 # --- main ------------------------------------------------------------------
 
 main() {
@@ -624,6 +707,7 @@ main() {
     run_platform_step "${os}" packages "${target_user}"
     run_platform_step "${os}" brew "${target_user}"
     run_platform_step "${os}" nix "${target_user}"
+    run_platform_step "${os}" vmm "${target_user}"
   fi
 
   say "done — ${os} setup complete"

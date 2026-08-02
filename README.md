@@ -4,6 +4,7 @@ A single script that takes a fresh machine from stock to usable:
 
 - switches system package mirrors to **[USTC mirrors](https://mirrors.ustc.edu.cn)**
 - installs basic packages: `curl`, `git`, `htop`, `neovim`
+- sets up **virtualization** on headless servers: **libvirt/QEMU** with **KVM** acceleration (`virsh`, `virt-install`) on Debian, **bhyve/vm-bhyve** on FreeBSD — skipped on macOS
 - sets up **Homebrew / Linuxbrew** with USTC mirrors
 - installs the **Nix** package manager (Linux: multi-user daemon, macOS: default)
 - initializes an **ed25519 SSH key** for the target user (if missing)
@@ -35,11 +36,11 @@ curl -fsSL https://raw.githubusercontent.com/cassiuscai/config/master/install.sh
 
 ## Supported platforms
 
-| Platform                     | Package manager       | Mirror                                          | Homebrew | Nix |
-|------------------------------|-----------------------|-------------------------------------------------|----------|-----|
-| Debian 12 (bookworm), 13 (trixie) | `apt` (deb822)   | `mirrors.ustc.edu.cn/debian`                    | Linuxbrew at `/home/linuxbrew/.linuxbrew` | multi-user daemon |
-| macOS (Intel & Apple Silicon) | Homebrew             | `mirrors.ustc.edu.cn` (brew / core / cask / bottles) | Native Homebrew | multi-user daemon |
-| FreeBSD 14+                  | `pkg`                | `mirrors.ustc.edu.cn/freebsd-pkg`               | not supported — `pkg` covers packages | not supported |
+| Platform                     | Package manager       | Mirror                                          | Homebrew | Nix | Virtualization |
+|------------------------------|-----------------------|-------------------------------------------------|----------|-----|----------------|
+| Debian 12 (bookworm), 13 (trixie) | `apt` (deb822)   | `mirrors.ustc.edu.cn/debian`                    | Linuxbrew at `/home/linuxbrew/.linuxbrew` | multi-user daemon | libvirt/QEMU + KVM (`virsh`, `virt-install`) |
+| macOS (Intel & Apple Silicon) | Homebrew             | `mirrors.ustc.edu.cn` (brew / core / cask / bottles) | Native Homebrew | multi-user daemon | none — skipped |
+| FreeBSD 14+                  | `pkg`                | `mirrors.ustc.edu.cn/freebsd-pkg`               | not supported — `pkg` covers packages | not supported | bhyve + `vm-bhyve` |
 
 > **FreeBSD**: Homebrew/Linuxbrew and Nix do not support FreeBSD. The script
 > keeps FreeBSD on its native `pkg` manager and skips both steps.
@@ -73,16 +74,29 @@ USTC `brew-install.sh` (profile at `/etc/profile.d/linuxbrew.sh`), and finally
 installs Nix in multi-user daemon mode:
 `curl ... https://nixos.org/nix/install | sh -s -- --daemon`.
 
+Then it sets up the **vmm** stack — libvirt/QEMU with KVM acceleration:
+`libvirt-daemon-system`, `libvirt-clients`, `virtinst`, `qemu-system-x86`,
+`qemu-utils`. It enables the `libvirtd` service, adds the user to the
+`libvirt` and `kvm` groups, and starts libvirt's default NAT network — so
+`virsh` and `virt-install` work out of the box on a headless server (no GUI
+tools are installed). If `/dev/kvm` is missing, a warning is printed and VMs
+fall back to software emulation.
+
 **macOS** — writes the `HOMEBREW_*` USTC mirror exports into `~/.zprofile`,
 installs Homebrew (if missing) from the USTC installer, then
 `brew install curl git htop neovim just`, and installs Nix with the official
 installer (defaults to the multi-user daemon via launchd; it may prompt for
-your sudo password).
+your sudo password). No virtualization stack is installed on macOS.
 
 **FreeBSD** — configures `/usr/local/etc/pkg.conf` to use
 `mirrors.ustc.edu.cn/freebsd-pkg` (with `${ABI}` substitution), runs
 `pkg update -f`, installs the basic packages, installs `sudo` and adds the
-user to the `wheel` group. Homebrew and Nix are skipped (unsupported).
+user to the `wheel` group. It then sets up the **vmm** stack — bhyve (the
+native hypervisor, KVM's counterpart) with `vm-bhyve` and `bhyve-firmware`:
+loads the `vmm` kernel module now and at boot (`/boot/loader.conf`), enables
+tap interfaces (`net.link.tap.up_on_open=1`), enables the `vm` rc service,
+and initializes the VM directory with `vm init`. Homebrew and Nix are skipped
+(unsupported).
 
 All three platforms run the same SSH step: if `~/.ssh/id_ed25519` doesn't
 exist, a passphrase-less ed25519 key is created for the target user, with no
@@ -112,6 +126,13 @@ a new OS:
    platform_ssh_arch()       { ... }   # init an SSH key, or a no-op
    ```
 
+   Optionally, a virtualization stack (define only if the platform should get
+   one — macOS deliberately omits it):
+
+   ```sh
+   platform_vmm_arch()       { ... }   # set up virsh/QEMU, vm-bhyve, etc.
+   ```
+
 4. Only if the platform does **not** need root:
 
    ```sh
@@ -124,6 +145,11 @@ registry* section in `install.sh` for the full contract.
 
 ## Notes
 
+- On Debian, the `libvirt` and `kvm` group memberships apply to new login
+  sessions — log out and back in before using `virsh` as a non-root user.
+- The script makes the host VM-ready; create machines afterwards with
+  `virt-install` (Debian) or `sudo vm create` (FreeBSD). `virsh` runs without
+  root after a fresh login; `vm` is run via sudo.
 - Homebrew refuses to run as root. If you install as root, run
   `sudo ./install.sh <non-root-user>` so that user owns the Homebrew install.
 - The macOS Nix installer may prompt for your sudo password interactively —
