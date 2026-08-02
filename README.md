@@ -158,8 +158,6 @@ registry* section in `install.sh` for the full contract.
   bootstrap runs non-interactively; add a passphrase later with `ssh-keygen -p`.
 - `apt-get update` / `pkg update` failures abort the remaining steps so you can
   fix network or keyring issues first.
-- Existing mirror configuration files are backed up with a timestamp
-  (`*.bak.YYYYMMDDHHMMSS`) before being replaced.
 - USTC mirror references: <https://mirrors.ustc.edu.cn>
 
 ## License

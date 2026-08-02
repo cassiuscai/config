@@ -306,12 +306,6 @@ platform_mirror_debian() {
     *) die "unsupported Debian release '${codename:-unknown}' — supported: ${DEB_SUPPORTED_RELEASES[*]}" ;;
   esac
 
-  # Keep an untouched copy of any previous mirror file.
-  if [[ -f "${DEB_MIRROR_FILE}" ]]; then
-    cp -a "${DEB_MIRROR_FILE}" "${DEB_MIRROR_FILE}.bak.$(date +%Y%m%d%H%M%S)"
-    say "backed up existing ${DEB_MIRROR_FILE}"
-  fi
-
   mkdir -p "${DEB_MIRROR_DIR}"
   cat > "${DEB_MIRROR_FILE}" <<EOF
 Types: deb
@@ -331,10 +325,8 @@ EOF
   # Disable any leftover legacy one-line sources.list to avoid duplicate
   # sources alongside the new deb822 file.
   if [[ -f "${DEB_LEGACY_FILE}" ]] && grep -qE '^[^#]' "${DEB_LEGACY_FILE}"; then
-    local backup="${DEB_LEGACY_FILE}.bak.$(date +%Y%m%d%H%M%S)"
-    cp -a "${DEB_LEGACY_FILE}" "${backup}"
     sed -i -E 's/^([^#])/# \1/' "${DEB_LEGACY_FILE}"
-    say "disabled legacy ${DEB_LEGACY_FILE} (backup: ${backup})"
+    say "disabled legacy ${DEB_LEGACY_FILE}"
   fi
 
   say "running apt-get update ..."
@@ -598,10 +590,6 @@ platform_mirror_freebsd() {
   if [[ -f "${conf}" ]] && grep -q 'mirrors.ustc.edu.cn' "${conf}"; then
     say "pkg already configured for USTC — skipping"
   else
-    if [[ -f "${conf}" ]]; then
-      cp -a "${conf}" "${conf}.bak.$(date +%Y%m%d%H%M%S)"
-      say "backed up existing ${conf}"
-    fi
     mkdir -p "$(dirname "${conf}")"
     cat > "${conf}" <<EOF
 # USTC FreeBSD pkg mirror (install.sh)
