@@ -5,7 +5,7 @@ A single script that takes a fresh machine from stock to usable:
 - switches system package mirrors to **[USTC mirrors](https://mirrors.ustc.edu.cn)**
 - installs basic packages: `curl`, `git`, `htop`, `neovim`
 - sets up **virtualization** on headless servers: **libvirt/QEMU** with **KVM** acceleration (`virsh`, `virt-install`) on Debian, **bhyve/vm-bhyve** on FreeBSD — skipped on macOS
-- sets up **Homebrew / Linuxbrew** with USTC mirrors
+- sets up **Homebrew / Linuxbrew** with BFSU mirrors
 - installs the **Nix** package manager (Linux: multi-user daemon, macOS: default)
 - initializes an **ed25519 SSH key** for the target user (if missing)
 - bootstraps **sudo** for the target user (minimal installs)
@@ -39,7 +39,7 @@ curl -fsSL https://raw.githubusercontent.com/cassiuscai/config/master/install.sh
 | Platform                     | Package manager       | Mirror                                          | Homebrew | Nix | Virtualization |
 |------------------------------|-----------------------|-------------------------------------------------|----------|-----|----------------|
 | Debian 12 (bookworm), 13 (trixie) | `apt` (deb822)   | `mirrors.ustc.edu.cn/debian`                    | Linuxbrew at `/home/linuxbrew/.linuxbrew` | multi-user daemon | libvirt/QEMU + KVM (`virsh`, `virt-install`) |
-| macOS (Intel & Apple Silicon) | Homebrew             | `mirrors.ustc.edu.cn` (brew / core / cask / bottles) | Native Homebrew | multi-user daemon | none — skipped |
+| macOS (Intel & Apple Silicon) | Homebrew             | `mirrors.bfsu.edu.cn` (brew / core / cask / bottles) | Native Homebrew | multi-user daemon | none — skipped |
 | FreeBSD 14+                  | `pkg`                | `mirrors.ustc.edu.cn/freebsd-pkg`               | not supported — `pkg` covers packages | not supported | bhyve + `vm-bhyve` |
 
 > **FreeBSD**: Homebrew/Linuxbrew and Nix do not support FreeBSD. The script
@@ -69,9 +69,9 @@ That user gets sudo privileges and owns the Homebrew/Linuxbrew install.
 **Debian** — rewrites `/etc/apt/sources.list.d/debian.sources` (deb822 format)
 to `mirrors.ustc.edu.cn` for the detected release (trixie / bookworm),
 disables any legacy one-line `sources.list`, runs `apt-get update`, installs
-the basic packages, then installs Linuxbrew into `/home/linuxbrew` using the
-upstream `brew-install.sh` (git/bottle mirrors stay on USTC; profile at
-`/etc/profile.d/linuxbrew.sh`), and finally
+the basic packages, then installs Linuxbrew into `/home/linuxbrew` by cloning
+the BFSU brew installer (git/bottle/API mirrors all point at
+`mirrors.bfsu.edu.cn`; profile at `/etc/profile.d/linuxbrew.sh`), and finally
 installs Nix in multi-user daemon mode:
 `curl ... https://nixos.org/nix/install | sh -s -- --daemon`.
 
@@ -83,8 +83,8 @@ Then it sets up the **vmm** stack — libvirt/QEMU with KVM acceleration:
 tools are installed). If `/dev/kvm` is missing, a warning is printed and VMs
 fall back to software emulation.
 
-**macOS** — writes the `HOMEBREW_*` USTC mirror exports into `~/.zprofile`,
-installs Homebrew (if missing) from the upstream installer, then
+**macOS** — writes the `HOMEBREW_*` BFSU mirror exports into `~/.zprofile`,
+installs Homebrew (if missing) from the cloned BFSU installer, then
 `brew install curl git htop neovim just`, and installs Nix with the official
 installer (defaults to the multi-user daemon via launchd; it may prompt for
 your sudo password). No virtualization stack is installed on macOS.
@@ -159,7 +159,8 @@ registry* section in `install.sh` for the full contract.
   bootstrap runs non-interactively; add a passphrase later with `ssh-keygen -p`.
 - `apt-get update` / `pkg update` failures abort the remaining steps so you can
   fix network or keyring issues first.
-- USTC mirror references: <https://mirrors.ustc.edu.cn>
+- USTC mirror references: <https://mirrors.ustc.edu.cn> (system package mirrors)
+- BFSU mirror references: <https://mirrors.bfsu.edu.cn> (Homebrew / Linuxbrew)
 
 ## License
 

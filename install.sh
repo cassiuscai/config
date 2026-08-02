@@ -7,14 +7,14 @@
 #   * sets up virtualization on headless servers (no desktop): libvirt/QEMU
 #     with KVM acceleration on Debian, bhyve/vm-bhyve on FreeBSD — macOS is
 #     skipped
-#   * sets up Homebrew / Linuxbrew with USTC mirrors
+#   * sets up Homebrew / Linuxbrew with BFSU mirrors (mirrors.bfsu.edu.cn)
 #   * installs the Nix package manager (Linux: multi-user daemon; macOS: default)
 #   * initializes an ed25519 SSH key for the target user (if missing)
 #   * bootstraps sudo for the target user (minimal installs)
 #
 # Supported platforms:
 #   debian  — apt (deb822) → mirrors.ustc.edu.cn, Linuxbrew at /home/linuxbrew
-#   macos   — Homebrew     → mirrors.ustc.edu.cn (brew/core/cask/bottles)
+#   macos   — Homebrew     → mirrors.bfsu.edu.cn (brew/core/cask/bottles)
 #   freebsd — pkg          → mirrors.ustc.edu.cn/freebsd-pkg (no Homebrew)
 #
 # Extensible by design: every platform implements the same small set of step
@@ -34,15 +34,17 @@ set -euo pipefail
 
 BASIC_PACKAGES=(curl git htop neovim just)
 
-# USTC Homebrew mirrors (https://mirrors.ustc.edu.cn/help/). Git remotes and
-# bottle downloads stay on USTC; the installer script itself comes from
-# upstream GitHub (mirrors.ustc.edu.cn/misc/brew-install.sh is TLS-flaky).
-BREW_GIT_REMOTE='https://mirrors.ustc.edu.cn/brew.git'
-BREW_CORE_GIT_REMOTE='https://mirrors.ustc.edu.cn/homebrew-core.git'
-BREW_CASK_GIT_REMOTE='https://mirrors.ustc.edu.cn/homebrew-cask.git'
-BREW_BOTTLE_DOMAIN='https://mirrors.ustc.edu.cn/homebrew-bottles'
-BREW_API_DOMAIN='https://mirrors.ustc.edu.cn/homebrew-bottles/api'
-BREW_INSTALL_URL='https://github.com/Homebrew/install/raw/HEAD/install.sh'
+# BFSU Homebrew mirrors (https://mirrors.bfsu.edu.cn/help/homebrew/). USTC's
+# brew mirror proved TLS-unstable, so git remotes, bottles, the JSON API and
+# the installer repo all come from BFSU. HOMEBREW_INSTALL_FROM_API=1 makes
+# brew use the API JSON instead of cloning the huge homebrew-core repo.
+BREW_GIT_REMOTE='https://mirrors.bfsu.edu.cn/git/homebrew/brew.git'
+BREW_CORE_GIT_REMOTE='https://mirrors.bfsu.edu.cn/git/homebrew/homebrew-core.git'
+BREW_CASK_GIT_REMOTE='https://mirrors.bfsu.edu.cn/git/homebrew/homebrew-cask.git'
+BREW_BOTTLE_DOMAIN='https://mirrors.bfsu.edu.cn/homebrew-bottles'
+BREW_API_DOMAIN='https://mirrors.bfsu.edu.cn/homebrew-bottles/api'
+BREW_INSTALL_GIT='https://mirrors.bfsu.edu.cn/git/homebrew/install.git'
+BREW_INSTALL_FROM_API=1
 
 NIX_INSTALL_URL='https://nixos.org/nix/install'
 
@@ -355,6 +357,7 @@ HOMEBREW_BREW_GIT_REMOTE="${BREW_GIT_REMOTE}"
 HOMEBREW_CORE_GIT_REMOTE="${BREW_CORE_GIT_REMOTE}"
 HOMEBREW_BOTTLE_DOMAIN="${BREW_BOTTLE_DOMAIN}"
 HOMEBREW_API_DOMAIN="${BREW_API_DOMAIN}"
+HOMEBREW_INSTALL_FROM_API=1
 EOF
 }
 
@@ -365,7 +368,22 @@ run_brew_as_user() {
     HOMEBREW_CORE_GIT_REMOTE="${BREW_CORE_GIT_REMOTE}" \
     HOMEBREW_BOTTLE_DOMAIN="${BREW_BOTTLE_DOMAIN}" \
     HOMEBREW_API_DOMAIN="${BREW_API_DOMAIN}" \
+    HOMEBREW_INSTALL_FROM_API=1 \
     bash -c "$*"
+}
+
+# Clone the Homebrew installer into a user-owned temp dir; prints the repo
+# path. BFSU serves the installer as a git repo (no raw script URL), and
+# cloning beats "$(curl ...)" — which would swallow download failures.
+fetch_brew_installer() {
+  local user="$1" dir
+  dir="$(run_as_user "${user}" mktemp -d '/tmp/brew-install.XXXXXX')" \
+    || die "failed to create a temp dir for the brew installer"
+  if ! run_as_user "${user}" git clone --depth=1 "${BREW_INSTALL_GIT}" "${dir}/install" >/dev/null 2>&1; then
+    rm -rf "${dir}"
+    die "failed to clone brew installer from ${BREW_INSTALL_GIT} — check the output above"
+  fi
+  printf '%s\n' "${dir}"
 }
 
 platform_brew_debian() {
@@ -403,28 +421,18 @@ EOF
     chown "${brew_user}" /home/linuxbrew
   fi
 
-  # Download the installer first: running "$(curl ...)" inline swallows curl
-  # failures (empty command substitution → exit 0), so a broken mirror only
-  # surfaces later as a confusing "brew: No such file or directory".
   local installer
-  installer="$(mktemp)"
-  say "downloading brew installer from ${BREW_INSTALL_URL} ..."
-  if ! curl -fsSL "${BREW_INSTALL_URL}" -o "${installer}"; then
-    rm -f "${installer}"
-    die "failed to download brew installer — check the output above"
-  fi
-  chmod 0644 "${installer}"
-
+  installer="$(fetch_brew_installer "${brew_user}")"
   say "installing Linuxbrew ..."
-  if ! run_brew_as_user "${brew_user}" "bash '${installer}'"; then
-    rm -f "${installer}"
+  if ! run_brew_as_user "${brew_user}" "bash '${installer}/install.sh'"; then
+    rm -rf "${installer}"
     die "Linuxbrew install failed — check the output above"
   fi
-  rm -f "${installer}"
+  rm -rf "${installer}"
 
   say "running brew update ..."
   if run_brew_as_user "${brew_user}" "${BREW_BIN} update"; then
-    say "done — Homebrew ready at ${BREW_PREFIX} (USTC mirrors)"
+    say "done — Homebrew ready at ${BREW_PREFIX} (BFSU mirrors)"
   else
     die "brew update failed — check the output above"
   fi
@@ -538,14 +546,7 @@ platform_packages_macos() {
 
   if [[ ! -x "${brew}" ]]; then
     local installer
-    installer="$(mktemp)"
-    say "downloading brew installer from ${BREW_INSTALL_URL} ..."
-    if ! curl -fsSL "${BREW_INSTALL_URL}" -o "${installer}"; then
-      rm -f "${installer}"
-      die "failed to download brew installer — check the output above"
-    fi
-    chmod 0644 "${installer}"
-
+    installer="$(fetch_brew_installer "${user}")"
     say "installing Homebrew ..."
     if ! run_as_user "${user}" env NONINTERACTIVE=1 \
         HOMEBREW_BREW_GIT_REMOTE="${BREW_GIT_REMOTE}" \
@@ -553,11 +554,12 @@ platform_packages_macos() {
         HOMEBREW_CASK_GIT_REMOTE="${BREW_CASK_GIT_REMOTE}" \
         HOMEBREW_BOTTLE_DOMAIN="${BREW_BOTTLE_DOMAIN}" \
         HOMEBREW_API_DOMAIN="${BREW_API_DOMAIN}" \
-        bash "${installer}"; then
-      rm -f "${installer}"
+        HOMEBREW_INSTALL_FROM_API=1 \
+        bash "${installer}/install.sh"; then
+      rm -rf "${installer}"
       die "Homebrew install failed — check the output above"
     fi
-    rm -f "${installer}"
+    rm -rf "${installer}"
   else
     say "Homebrew already installed at $(dirname "$(dirname "${brew}")")"
   fi
