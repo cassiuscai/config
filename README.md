@@ -70,7 +70,8 @@ That user gets sudo privileges and owns the Homebrew/Linuxbrew install.
 to `mirrors.ustc.edu.cn` for the detected release (trixie / bookworm),
 disables any legacy one-line `sources.list`, runs `apt-get update`, installs
 the basic packages, then installs Linuxbrew into `/home/linuxbrew` using the
-USTC `brew-install.sh` (profile at `/etc/profile.d/linuxbrew.sh`), and finally
+upstream `brew-install.sh` (git/bottle mirrors stay on USTC; profile at
+`/etc/profile.d/linuxbrew.sh`), and finally
 installs Nix in multi-user daemon mode:
 `curl ... https://nixos.org/nix/install | sh -s -- --daemon`.
 
@@ -83,7 +84,7 @@ tools are installed). If `/dev/kvm` is missing, a warning is printed and VMs
 fall back to software emulation.
 
 **macOS** — writes the `HOMEBREW_*` USTC mirror exports into `~/.zprofile`,
-installs Homebrew (if missing) from the USTC installer, then
+installs Homebrew (if missing) from the upstream installer, then
 `brew install curl git htop neovim just`, and installs Nix with the official
 installer (defaults to the multi-user daemon via launchd; it may prompt for
 your sudo password). No virtualization stack is installed on macOS.

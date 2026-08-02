@@ -34,13 +34,15 @@ set -euo pipefail
 
 BASIC_PACKAGES=(curl git htop neovim just)
 
-# USTC Homebrew mirrors (https://mirrors.ustc.edu.cn/help/)
+# USTC Homebrew mirrors (https://mirrors.ustc.edu.cn/help/). Git remotes and
+# bottle downloads stay on USTC; the installer script itself comes from
+# upstream GitHub (mirrors.ustc.edu.cn/misc/brew-install.sh is TLS-flaky).
 BREW_GIT_REMOTE='https://mirrors.ustc.edu.cn/brew.git'
 BREW_CORE_GIT_REMOTE='https://mirrors.ustc.edu.cn/homebrew-core.git'
 BREW_CASK_GIT_REMOTE='https://mirrors.ustc.edu.cn/homebrew-cask.git'
 BREW_BOTTLE_DOMAIN='https://mirrors.ustc.edu.cn/homebrew-bottles'
 BREW_API_DOMAIN='https://mirrors.ustc.edu.cn/homebrew-bottles/api'
-BREW_INSTALL_URL='https://mirrors.ustc.edu.cn/misc/brew-install.sh'
+BREW_INSTALL_URL='https://github.com/Homebrew/install/raw/HEAD/install.sh'
 
 NIX_INSTALL_URL='https://nixos.org/nix/install'
 
@@ -401,11 +403,24 @@ EOF
     chown "${brew_user}" /home/linuxbrew
   fi
 
-  say "installing Linuxbrew from USTC mirror ..."
-  if ! run_brew_as_user "${brew_user}" \
-      "/bin/bash -c \"\$(curl -fsSL ${BREW_INSTALL_URL})\""; then
+  # Download the installer first: running "$(curl ...)" inline swallows curl
+  # failures (empty command substitution → exit 0), so a broken mirror only
+  # surfaces later as a confusing "brew: No such file or directory".
+  local installer
+  installer="$(mktemp)"
+  say "downloading brew installer from ${BREW_INSTALL_URL} ..."
+  if ! curl -fsSL "${BREW_INSTALL_URL}" -o "${installer}"; then
+    rm -f "${installer}"
+    die "failed to download brew installer — check the output above"
+  fi
+  chmod 0644 "${installer}"
+
+  say "installing Linuxbrew ..."
+  if ! run_brew_as_user "${brew_user}" "bash '${installer}'"; then
+    rm -f "${installer}"
     die "Linuxbrew install failed — check the output above"
   fi
+  rm -f "${installer}"
 
   say "running brew update ..."
   if run_brew_as_user "${brew_user}" "${BREW_BIN} update"; then
@@ -522,16 +537,27 @@ platform_packages_macos() {
   brew="$(brew_path_macos)"
 
   if [[ ! -x "${brew}" ]]; then
-    say "installing Homebrew from USTC mirror ..."
+    local installer
+    installer="$(mktemp)"
+    say "downloading brew installer from ${BREW_INSTALL_URL} ..."
+    if ! curl -fsSL "${BREW_INSTALL_URL}" -o "${installer}"; then
+      rm -f "${installer}"
+      die "failed to download brew installer — check the output above"
+    fi
+    chmod 0644 "${installer}"
+
+    say "installing Homebrew ..."
     if ! run_as_user "${user}" env NONINTERACTIVE=1 \
         HOMEBREW_BREW_GIT_REMOTE="${BREW_GIT_REMOTE}" \
         HOMEBREW_CORE_GIT_REMOTE="${BREW_CORE_GIT_REMOTE}" \
         HOMEBREW_CASK_GIT_REMOTE="${BREW_CASK_GIT_REMOTE}" \
         HOMEBREW_BOTTLE_DOMAIN="${BREW_BOTTLE_DOMAIN}" \
         HOMEBREW_API_DOMAIN="${BREW_API_DOMAIN}" \
-        /bin/bash -c "$(curl -fsSL "${BREW_INSTALL_URL}")"; then
+        bash "${installer}"; then
+      rm -f "${installer}"
       die "Homebrew install failed — check the output above"
     fi
+    rm -f "${installer}"
   else
     say "Homebrew already installed at $(dirname "$(dirname "${brew}")")"
   fi
