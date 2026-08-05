@@ -73,7 +73,7 @@ the basic packages, then installs Linuxbrew into `/home/linuxbrew` by cloning
 the BFSU brew installer (git/bottle/API mirrors all point at
 `mirrors.bfsu.edu.cn`; profile at `/etc/profile.d/linuxbrew.sh`), and finally
 installs Nix in multi-user daemon mode:
-`curl ... https://nixos.org/nix/install | sh -s -- --daemon`.
+`curl ... https://mirrors.bfsu.edu.cn/nix/latest/install | sh -s -- --daemon`.
 
 Then it sets up the **vmm** stack — libvirt/QEMU with KVM acceleration:
 `libvirt-daemon-system`, `libvirt-clients`, `virtinst`, `qemu-system-x86`,
