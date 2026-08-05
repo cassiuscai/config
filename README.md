@@ -14,10 +14,27 @@ A single script that takes a fresh machine from stock to usable:
 
 No clone needed — pipe the script straight from GitHub:
 
-**Debian / FreeBSD** — run as root; `<username>` gets sudo + Homebrew + Nix:
+**Debian** — a minimal install ships with neither `curl` nor `sudo`, so
+bootstrap them first, then run the script. Run as root; `<username>` gets
+sudo + Homebrew + Nix:
+
+```sh
+apt-get update && apt-get install -y curl sudo \
+  && curl -fsSL https://raw.githubusercontent.com/cassiuscai/config/master/install.sh | bash -s -- <username>
+```
+
+On a machine that already has `curl` and `sudo` (or when the script has run
+before), just pipe it:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/cassiuscai/config/master/install.sh | sudo bash -s -- <username>
+```
+
+**FreeBSD** — bootstrap `curl` and `sudo` with `pkg` first (same idea):
+
+```sh
+pkg update -f && pkg install -y curl sudo \
+  && curl -fsSL https://raw.githubusercontent.com/cassiuscai/config/master/install.sh | bash -s -- <username>
 ```
 
 **macOS** — run as your own (admin) user; no sudo needed:
@@ -52,6 +69,13 @@ curl -fsSL https://raw.githubusercontent.com/cassiuscai/config/master/install.sh
 sudo ./install.sh [username]
 
 # macOS — run as your own (admin) user; no sudo needed
+./install.sh [username]
+```
+
+On a minimal Debian/FreeBSD install without `curl` or `sudo`, run directly as
+root — the script installs both itself:
+
+```sh
 ./install.sh [username]
 ```
 

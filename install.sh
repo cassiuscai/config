@@ -181,6 +181,9 @@ resolve_target_user() {
 #   Optional — define only for platforms that get a virtualization stack
 #   (deliberately omitted on macOS):
 #        platform_vmm_<os>       <user>   set up virsh/QEMU, vm-bhyve, etc.
+#   Optional — define only on platforms whose minimal installs lack core
+#   tools (Debian and FreeBSD ship without curl and sudo):
+#        platform_bootstrap_<os> <user>   install curl + sudo up front
 #   4. optionally define platform_requires_root_<os> if root is NOT required
 #      (the default is that root is required)
 #
@@ -290,6 +293,18 @@ DEB_SUPPORTED_RELEASES=(trixie bookworm)
 BREW_PREFIX='/home/linuxbrew/.linuxbrew'
 BREW_PROFILE='/etc/profile.d/linuxbrew.sh'
 BREW_BIN="${BREW_PREFIX}/bin/brew"
+
+# Minimal Debian installs ship without curl and sudo — install both up front
+# so the rest of the script can rely on them.
+platform_bootstrap_debian() {
+  local missing=()
+  command -v curl >/dev/null 2>&1 || missing+=(curl)
+  command -v sudo >/dev/null 2>&1 || missing+=(sudo)
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    say "installing base tools: ${missing[*]}"
+    apt-get install -y "${missing[@]}"
+  fi
+}
 
 platform_sudo_debian() {
   local target_user="$1"
@@ -608,6 +623,18 @@ platform_nix_macos() {
 
 # --- freebsd (pkg) ---------------------------------------------------------
 
+# FreeBSD base has fetch(1), not curl, and no sudo — install both up front.
+platform_bootstrap_freebsd() {
+  local missing=()
+  command -v curl >/dev/null 2>&1 || missing+=(curl)
+  command -v sudo >/dev/null 2>&1 || missing+=(sudo)
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    say "installing base tools: ${missing[*]}"
+    pkg update -f
+    pkg install -y "${missing[@]}"
+  fi
+}
+
 platform_sudo_freebsd() {
   local target_user="$1"
 
@@ -726,6 +753,7 @@ main() {
   fi
 
   target_user="$(resolve_target_user "${1:-}")"
+  run_platform_step "${os}" bootstrap "${target_user}"
   run_platform_step "${os}" sudo "${target_user}"
   run_platform_step "${os}" ssh "${target_user}"
 
