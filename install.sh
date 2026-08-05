@@ -49,7 +49,7 @@ BREW_INSTALL_FROM_API=1
 # flaky from some networks) — brew's git/bottle/API mirrors stay on BFSU.
 BREW_INSTALL_URL='https://github.com/Homebrew/install/raw/HEAD/install.sh'
 
-NIX_INSTALL_URL='https://mirrors.tuna.tsinghua.edu.cn/nix/latest/install'
+NIX_INSTALL_URL='https://mirrors.bfsu.edu.cn/nix/latest/install'
 
 # --- helpers ---------------------------------------------------------------
 
