@@ -19,8 +19,8 @@ bootstrap them first, then run the script. Run as root; `<username>` gets
 sudo + Homebrew + Nix:
 
 ```sh
-apt-get update && apt-get install -y curl sudo \
-  && curl -fsSL https://raw.githubusercontent.com/cassiuscai/config/master/install.sh | bash -s -- <username>
+apt-get update && apt-get install -y sudo curl \
+  && curl -fsSL https://raw.githubusercontent.com/cassiuscai/config/master/install.sh | sudo bash -s -- <username>
 ```
 
 On a machine that already has `curl` and `sudo` (or when the script has run
