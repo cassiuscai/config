@@ -22,8 +22,17 @@
 # "Platform registry" section below — dispatch is automatic.
 #
 # Usage:
-#   sudo ./install.sh [username]     # Debian / FreeBSD — run as root
-#   ./install.sh [username]          # macOS — run as your own user
+#   sudo ./install.sh [--username USER] [--profile PROFILE]   # Deb/FreeBSD
+#   ./install.sh [--username USER] [--profile PROFILE]        # macOS
+#
+#   --username  target user (flag > SUDO_USER > current user > interactive)
+#   --profile   'server' or 'client'; prompted interactively if not given:
+#               server — full setup incl. the virtualization stack (vmm)
+#               client — skip vmm (no local VM management); everything else
+#
+# The virtualization step (vmm) is skipped for the 'client' profile on every
+# platform. On the server profile it installs libvirt/QEMU+libvirtd (Debian)
+# or bhyve/vm-bhyve (FreeBSD); macOS has no vmm step in either profile.
 #
 # The target user (CLI arg > SUDO_USER > current user > interactive prompt)
 # gets sudo privileges and owns the Homebrew install. If prompted, the sole
@@ -737,8 +746,82 @@ platform_vmm_freebsd() {
 
 # --- main ------------------------------------------------------------------
 
+usage() {
+  local os
+  os="$(uname -s)"
+  cat <<EOF
+Usage: $0 [options]
+
+One-shot setup for a fresh machine (${os}).
+
+Options:
+  --username USER   Target user to set up sudo/Homebrew/SSH for. If omitted,
+                    resolved from SUDO_USER > current user > interactive prompt.
+  --profile PROFILE Setup profile: 'server' or 'client'. If omitted, prompted.
+                      server — full setup incl. the virtualization stack (vmm)
+                      client — skip vmm (no local VM management)
+  -h, --help        Show this help and exit.
+
+Supported platforms: debian, macos, freebsd.
+EOF
+}
+
+# Prompt interactively for the setup profile; 'server' is suggested as the
+# default (matches the previous behavior when no profile was supplied).
+prompt_profile() {
+  local entered
+  while true; do
+    if ! read -r -p "Select setup profile (server/client) [server]: " entered; then
+      die "no profile entered"
+    fi
+    entered="${entered:-server}"
+    case "${entered}" in
+      server|client) printf '%s\n' "${entered}"; return 0 ;;
+      *) warn "unknown profile '${entered}' — expected 'server' or 'client'" ;;
+    esac
+  done
+}
+
+# Parse --username / --profile / --help / -h. Unknown options are rejected.
+# Sets the global USERNAME_ARG / PROFILE_ARG; calling with no --username or
+# --profile simply leaves those empty (prompts happen later).
+parse_args() {
+  local arg prev=""
+  USERNAME_ARG=""
+  PROFILE_ARG=""
+  for arg in "$@"; do
+    case "${arg}" in
+      --help|-h)
+        usage
+        exit 0
+        ;;
+      --username|--profile)
+        prev="${arg}"
+        ;;
+      --username=*)
+        USERNAME_ARG="${arg#*=}"; prev=""
+        ;;
+      --profile=*)
+        PROFILE_ARG="${arg#*=}"; prev=""
+        ;;
+      -*) die "unknown option '${arg}' — see --help" ;;
+      *)
+        case "${prev}" in
+          --username) USERNAME_ARG="${arg}" ;;
+          --profile)  PROFILE_ARG="${arg}" ;;
+          *) die "unexpected argument '${arg}' — see --help" ;;
+        esac
+        prev=""
+        ;;
+    esac
+  done
+  if [[ -n "${prev}" ]]; then
+    die "option '${prev}' requires a value — see --help"
+  fi
+}
+
 main() {
-  local os target_user
+  local os target_user profile
   os="$(detect_os)"
 
   case " ${SUPPORTED_OS[*]} " in
@@ -752,7 +835,19 @@ main() {
     require_root
   fi
 
-  target_user="$(resolve_target_user "${1:-}")"
+  parse_args "$@"
+  target_user="$(resolve_target_user "${USERNAME_ARG:-}")"
+  if [[ -n "${PROFILE_ARG:-}" ]]; then
+    profile="${PROFILE_ARG}"
+    case "${profile}" in
+      server|client) ;;
+      *) die "unknown profile '${profile}' — supported: server, client" ;;
+    esac
+  else
+    profile="$(prompt_profile)"
+  fi
+  say "profile: ${profile}"
+
   run_platform_step "${os}" bootstrap "${target_user}"
   run_platform_step "${os}" sudo "${target_user}"
   run_platform_step "${os}" ssh "${target_user}"
@@ -763,10 +858,16 @@ main() {
     run_platform_step "${os}" packages "${target_user}"
     run_platform_step "${os}" brew "${target_user}"
     run_platform_step "${os}" nix "${target_user}"
-    run_platform_step "${os}" vmm "${target_user}"
+    # The virtualization stack (vmm) is server-only: clients have no VM
+    # management, so skip it for the 'client' profile on every platform.
+    if [[ "${profile}" == "server" ]]; then
+      run_platform_step "${os}" vmm "${target_user}"
+    else
+      say "profile 'client' — skipping virtualization (vmm)"
+    fi
   fi
 
-  say "done — ${os} setup complete"
+  say "done — ${os} setup complete (profile: ${profile})"
 }
 
 main "$@"
