@@ -294,7 +294,7 @@ detect_codename() {
 _virt_probe_files() {
   local f
   for f in "$@"; do
-    grep -qiE 'hypervisor|virtual|vmware|qemu|kvm|virtualbox|xen|bhyve|hvm' "${f}" 2>/dev/null \
+    grep -qiE 'hypervisor|vmware|qemu|kvm|virtualbox|xen|bhyve|hvm|vmw' "${f}" 2>/dev/null \
       && return 0
   done
   return 1
@@ -305,16 +305,21 @@ _virt_probe_files() {
 # sensible default profile: VMs default to 'client', bare metal to 'server'.
 # Detection is OS-specific and supports Linux, the BSDs and Solaris/illumos.
 detect_virt() {
+  local v
   case "$(uname -s)" in
     Linux)
-      local v
+      # systemd-detect-virt is authoritative on Linux when present: report
+      # 'none' for bare metal, so trust it and do NOT fall through to the
+      # looser DMI/cpuinfo heuristics (they produce false positives, e.g.
+      # 'address sizes ... bits virtual' in /proc/cpuinfo).
       if command -v systemd-detect-virt >/dev/null 2>&1; then
         v="$(systemd-detect-virt 2>/dev/null || true)"
         if [[ -n "${v}" && "${v}" != "none" ]]; then
           return 0
         fi
+        return 1
       fi
-      # Fallback heuristics when systemd-detect-virt is unavailable.
+      # Fallback only when systemd-detect-virt is unavailable.
       _virt_probe_files \
         /sys/class/dmi/id/product_name \
         /sys/class/dmi/id/sys_vendor \
@@ -333,7 +338,7 @@ detect_virt() {
       # hw.vendor/hw.product reveal the OEM/firmware ("QEMU", "VMware, Inc.",
       # "innotek GmbH" ...); NetBSD also exposes DMI via machdep.dmi.*.
       sysctl hw.vendor hw.product machdep.dmi.system-product machdep.dmi.system-vendor 2>/dev/null \
-        | grep -qiE 'hypervisor|virtual|vmware|qemu|kvm|virtualbox|xen|hvm' \
+        | grep -qiE 'hypervisor|vmware|qemu|kvm|virtualbox|xen|bhyve|hvm' \
         && return 0
       return 1
       ;;
