@@ -24,17 +24,23 @@ https://raw.githubusercontent.com/cassiuscai/config/master/install.sh
 
 ### Debian
 
+Both steps must run **as root** (via `sudo` or a root shell). The script itself
+requires root on Debian — it rewrites apt sources, installs packages, and
+writes `/etc/sudoers.d/`.
+
 **Step 1 — apt prerequisites** (only needed on a minimal install that lacks
-`curl`/`sudo`; skip if they're already present):
+`curl`/`sudo`; skip if they're already present). Run as **root**:
 
 ```sh
+# run as root: sudo -i  (or prefix with sudo)
 apt-get update && apt-get install -y sudo curl
 ```
 
-**Step 2 — run the script as root**, replacing `<username>` and `<profile>`
-with your target user and one of `server` / `client`:
+**Step 2 — run the script** (already elevates via `sudo`). Replace `<username>`
+with your target user and `<profile>` with one of `server` / `client`:
 
 ```sh
+# elevated to root automatically by sudo
 curl -fsSL https://raw.githubusercontent.com/cassiuscai/config/master/install.sh \
   | sudo bash -s -- --username <username> --profile <profile>
 ```
@@ -44,24 +50,35 @@ pipe the script directly.
 
 ### FreeBSD
 
-**Step 1 — pkg prerequisites** (minimal installs without `curl`/`sudo`):
+Both steps must run **as root** — the script configures `pkg` mirrors, installs
+packages, and writes `/usr/local/etc/sudoers.d/`. Login as root directly or use
+`su -`.
+
+**Step 1 — pkg prerequisites** (minimal installs without `curl`/`sudo`). Run
+as **root**:
 
 ```sh
+# run in a root shell: su -   (or via doas/sudo)
 pkg update -f && pkg install -y curl sudo
 ```
 
-**Step 2 — run the script as root:**
+**Step 2 — run the script** as **root**:
 
 ```sh
+# run as root: su -  (do NOT need sudo on FreeBSD — be root already)
 curl -fsSL https://raw.githubusercontent.com/cassiuscai/config/master/install.sh \
   | bash -s -- --username <username> --profile <profile>
 ```
 
 ### macOS
 
-Run as your own (admin) user; no sudo or prerequisites needed:
+Run as your own (admin) user — **no root required** and no prerequisites.
+Homebrew installs into your user-owned directories (`/opt/homebrew` on Apple
+Silicon, `/usr/local` on Intel), so elevation is not needed; the Nix step may
+prompt for your password:
 
 ```sh
+# run as your normal admin user; no sudo
 curl -fsSL https://raw.githubusercontent.com/cassiuscai/config/master/install.sh | bash
 ```
 
@@ -90,17 +107,19 @@ curl -fsSL https://raw.githubusercontent.com/cassiuscai/config/master/install.sh
 ## From a local checkout
 
 ```sh
-# Debian / FreeBSD — run as root (directly, or via sudo)
+# Debian / FreeBSD — REQUIRED: run as root, e.g. sudo ./install.sh ...
 sudo ./install.sh [--username USER] [--profile server|client]
 
-# macOS — run as your own (admin) user; no sudo needed
+# macOS — run as your own (admin) user; NO root/sudo needed
 ./install.sh [--username USER] [--profile server|client]
 ```
 
 On a minimal Debian/FreeBSD install without `curl` or `sudo`, run directly as
-root — the script installs both itself:
+root (a real root shell, since `sudo` may not exist yet) — the script installs
+both itself:
 
 ```sh
+# must run in a root shell: sudo -i / su -   (sudo itself may be missing)
 ./install.sh [--username USER] [--profile server|client]
 ```
 
@@ -113,8 +132,13 @@ The target user is chosen in this order:
 
 That user gets sudo privileges and owns the Homebrew/Linuxbrew install.
 
-If `--profile` is not given, the script prompts to select a profile
-(`server` or `client`, `server` is the default).
+If `--profile` is not given, the script prompts to select a profile. The
+suggested default is detected automatically: `client` when running inside a
+virtual machine, `server` on bare metal. VM detection is cross-platform —
+Linux (`systemd-detect-virt` / DMI / cpuinfo), FreeBSD & DragonFly
+(`sysctl kern.vm_guest`), OpenBSD & NetBSD (`hw.vendor`/`hw.product`/DMI),
+and Solaris/illumos (`smbios`) — so the correct default is picked regardless
+of whether the host OS is Debian, a BSD, or Solaris.
 
 ## Profiles
 
@@ -126,12 +150,12 @@ platform:
 | `server`| Installed                           | password-protected              |
 | `client`| Skipped (no VM management)    | passwordless (`NOPASSWD:ALL`)   |
 
-- **`server`** (default) — full setup: packages, Homebrew, Nix, and the
-  virtualization stack (libvirt/QEMU+KVM on Debian, bhyve/vm-bhyve on
-  FreeBSD). sudo keeps the normal password prompt.
+- **`server`** — full setup: packages, Homebrew, Nix, and the virtualization
+  stack (libvirt/QEMU+KVM on Debian, bhyve/vm-bhyve on FreeBSD). sudo keeps
+  the normal password prompt. Default on bare metal.
 - **`client`** — a workstation/virtual-machine guest with no local VMs: skips
   the `vmm` step on all platforms (macOS has none anyway) and grants the
-  target user passwordless sudo.
+  target user passwordless sudo. Default inside a virtual machine.
 
 All non-vmm steps (mirrors, packages, Homebrew, Nix, SSH key) run identically
 in both profiles.

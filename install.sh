@@ -286,10 +286,87 @@ detect_codename() {
   esac
 }
 
-# Grant <user> full sudo via an isolated sudoers.d rule. Unlike relying on the
-# sudo/wheel group rule in /etc/sudoers, this cannot silently break if that
-# group line is missing or malformed. The rule is validated with visudo before
-# being installed.
+# Detect whether we are running inside a virtual machine. Returns 0 (true) if
+# in a VM, 1 (false) if on bare metal / container / unknown. Used to pick a
+# sensible default profile: VMs default to 'client', bare metal to 'server'.
+# Shared keyword probe: true if any of the given files contain a
+# virtualization hint. Used by the DMI/cpuinfo fallbacks on Linux.
+_virt_probe_files() {
+  local f
+  for f in "$@"; do
+    grep -qiE 'hypervisor|virtual|vmware|qemu|kvm|virtualbox|xen|bhyve|hvm' "${f}" 2>/dev/null \
+      && return 0
+  done
+  return 1
+}
+
+# Detect whether we are running inside a virtual machine. Returns 0 (true) if
+# in a VM, 1 (false) if on bare metal / container / unknown. Used to pick a
+# sensible default profile: VMs default to 'client', bare metal to 'server'.
+# Detection is OS-specific and supports Linux, the BSDs and Solaris/illumos.
+detect_virt() {
+  case "$(uname -s)" in
+    Linux)
+      local v
+      if command -v systemd-detect-virt >/dev/null 2>&1; then
+        v="$(systemd-detect-virt 2>/dev/null || true)"
+        if [[ -n "${v}" && "${v}" != "none" ]]; then
+          return 0
+        fi
+      fi
+      # Fallback heuristics when systemd-detect-virt is unavailable.
+      _virt_probe_files \
+        /sys/class/dmi/id/product_name \
+        /sys/class/dmi/id/sys_vendor \
+        /proc/cpuinfo
+      return $?
+      ;;
+    FreeBSD|DragonFly)
+      # kern.vm_guest reports vmware/hv/xen/bhyve/kvm/qemu/vbox/etc.; empty
+      # or "none" on bare metal. This is the canonical FreeBSD/DragonFly test.
+      case "$(sysctl -n kern.vm_guest 2>/dev/null || true)" in
+        ""|"none") return 1 ;;
+        *) return 0 ;;
+      esac
+      ;;
+    OpenBSD|NetBSD)
+      # hw.vendor/hw.product reveal the OEM/firmware ("QEMU", "VMware, Inc.",
+      # "innotek GmbH" ...); NetBSD also exposes DMI via machdep.dmi.*.
+      sysctl hw.vendor hw.product machdep.dmi.system-product machdep.dmi.system-vendor 2>/dev/null \
+        | grep -qiE 'hypervisor|virtual|vmware|qemu|kvm|virtualbox|xen|hvm' \
+        && return 0
+      return 1
+      ;;
+    SunOS)
+      # Solaris / illumos (OmniOS, SmartOS, OpenIndiana, Tribblix, ...):
+      # smbios reports the system manufacturer ("QEMU", "VMware", ...).
+      if command -v smbios >/dev/null 2>&1; then
+        smbios 2>/dev/null | grep -qiE 'vmware|qemu|kvm|virtualbox|xen|hvm' \
+          && return 0
+      fi
+      return 1
+      ;;
+    Darwin)
+      # macOS: the hypervisor framework exposes VMM presence; treat any
+      # virtualization-aware Mac conservatively as bare metal by default.
+      return 1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# Suggested default profile for unattended / no-flag installs: 'client' in a
+# virtual machine, 'server' on bare metal.
+default_profile() {
+  if detect_virt; then
+    printf '%s\n' 'client'
+  else
+    printf '%s\n' 'server'
+  fi
+}
+
 # Grant <user> full sudo via an isolated sudoers.d rule. Unlike relying on the
 # sudo/wheel group rule in /etc/sudoers, this cannot silently break if that
 # group line is missing or malformed. The rule is validated with visudo before
@@ -805,15 +882,16 @@ Supported platforms: debian, macos, freebsd.
 EOF
 }
 
-# Prompt interactively for the setup profile; 'server' is suggested as the
-# default (matches the previous behavior when no profile was supplied).
+# Prompt interactively for the setup profile. The suggested default is dynamic:
+# 'client' when running inside a VM, 'server' on bare metal.
 prompt_profile() {
-  local entered
+  local entered dflt
+  dflt="$(default_profile)"
   while true; do
-    if ! entered="$(prompt "Select setup profile (server/client) [server]: ")"; then
+    if ! entered="$(prompt "Select setup profile (server/client) [${dflt}]: ")"; then
       die "no profile entered"
     fi
-    entered="${entered:-server}"
+    entered="${entered:-${dflt}}"
     case "${entered}" in
       server|client) printf '%s\n' "${entered}"; return 0 ;;
       *) warn "unknown profile '${entered}' — expected 'server' or 'client'" ;;
