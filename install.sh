@@ -132,6 +132,59 @@ write_marked_block() {
   say "configured: ${file} (${marker})"
 }
 
+# Ensure <file> has a marker-guarded block that sources every *.sh in <dir>.
+# Bash/zsh don't auto-load a conf.d dir the way fish does, so we add a single
+# sourcing snippet (idempotent via marker) and put the real env in <dir>.
+_ensure_source_dir() {
+  local file="$1" marker="$2" dir="$3"
+  local snippet="for _cackle_f in \"${dir}\"/*.sh; do
+  [[ -e \"\${_cackle_f}\" ]] && source \"\${_cackle_f}\"
+done
+unset _cackle_f
+"
+  write_marked_block "${file}" "${marker}" "${snippet}"
+}
+
+# Write a marker-guarded environment block into conf-style directories (bash,
+# zsh, fish) for <user>, so envs are active in login/non-login shells and
+# across shells:
+#   bash -> ~/.bashrc.d/<marker>.sh      (sourced from .bashrc/.profile/.bash_profile)
+#   zsh  -> ~/.zshrc.d/<marker>.zsh       (sourced from .zshrc/.zprofile)
+#   fish -> ~/.config/fish/conf.d/<marker>.fish  (auto-loaded)
+# Pass the marker, a POSIX/bash/zsh block, and a fish block (may be empty to
+# skip fish).
+write_user_env() {
+  local user="$1" marker="$2" shell_block="${3:-}" fish_block="${4:-}"
+  local home
+  home="$(user_home "${user}")"
+  [[ -n "${home}" ]] || return 0
+
+  # bash conf.d
+  mkdir -p "${home}/.bashrc.d"
+  write_marked_block "${home}/.bashrc.d/${marker}.sh" "${marker}" "${shell_block}"
+  _ensure_source_dir "${home}/.bashrc"       "cackle-bashrc.d" "${home}/.bashrc.d"
+  _ensure_source_dir "${home}/.profile"      "cackle-bashrc.d" "${home}/.bashrc.d"
+  _ensure_source_dir "${home}/.bash_profile" "cackle-bashrc.d" "${home}/.bashrc.d"
+
+  # zsh conf.d
+  mkdir -p "${home}/.zshrc.d"
+  write_marked_block "${home}/.zshrc.d/${marker}.zsh" "${marker}" "${shell_block}"
+  _ensure_source_dir "${home}/.zshrc"     "cackle-zshrc.d" "${home}/.zshrc.d"
+  _ensure_source_dir "${home}/.zprofile"  "cackle-zshrc.d" "${home}/.zshrc.d"
+
+  # fish conf.d (auto-loaded directory, not config.fish)
+  if [[ -n "${fish_block}" ]]; then
+    mkdir -p "${home}/.config/fish/conf.d"
+    write_marked_block "${home}/.config/fish/conf.d/${marker}.fish" "${marker}" "${fish_block}"
+  fi
+
+  if [[ ${EUID} -eq 0 ]]; then
+    chown -R "${user}" "${home}/.bashrc" "${home}/.profile" "${home}/.bash_profile" \
+      "${home}/.zshrc" "${home}/.zprofile" "${home}/.bashrc.d" "${home}/.zshrc.d" \
+      "${home}/.config" 2>/dev/null || true
+  fi
+}
+
 # Is the Nix package manager already installed? (multi-user installs live in /nix)
 nix_installed() {
   [[ -x /nix/var/nix/profiles/default/bin/nix ]] || command -v nix >/dev/null 2>&1
@@ -501,6 +554,17 @@ HOMEBREW_INSTALL_FROM_API=1
 EOF
 }
 
+# Fish-syntax equivalent of brew_env_linux (set -gx, not export).
+brew_env_linux_fish() {
+  cat <<EOF
+set -gx HOMEBREW_BREW_GIT_REMOTE "${BREW_GIT_REMOTE}"
+set -gx HOMEBREW_CORE_GIT_REMOTE "${BREW_CORE_GIT_REMOTE}"
+set -gx HOMEBREW_BOTTLE_DOMAIN "${BREW_BOTTLE_DOMAIN}"
+set -gx HOMEBREW_API_DOMAIN "${BREW_API_DOMAIN}"
+set -gx HOMEBREW_INSTALL_FROM_API 1
+EOF
+}
+
 run_brew_as_user() {
   local user="$1"; shift
   run_as_user "${user}" env NONINTERACTIVE=1 \
@@ -549,6 +613,17 @@ $(brew_env_linux)
 eval "\$(${BREW_BIN} shellenv)"
 EOF
   say "wrote ${BREW_PROFILE}"
+
+  # /etc/profile.d/linuxbrew.sh only applies to login shells. Write the BFSU
+  # mirror vars plus `brew shellenv` into the user's shell conf.d dirs too
+  # (~/.bashrc.d, ~/.zshrc.d, fish conf.d) so brew keeps the mirror in every
+  # login/non-login shell — otherwise it falls back to the upstream
+  # formulae.brew.sh JSON API. Marker-guarded so re-runs are no-ops.
+  write_user_env "${brew_user}" 'cackle-brew-mirror' \
+    "$(brew_env_linux)
+eval \"\$(exec \"${BREW_BIN}\" shellenv)\"" \
+    "$(brew_env_linux_fish)
+eval (${BREW_BIN} shellenv)"
 
   if [[ -x "${BREW_BIN}" ]]; then
     say "Homebrew already installed at ${BREW_PREFIX}"
@@ -663,6 +738,18 @@ HOMEBREW_API_DOMAIN="${BREW_API_DOMAIN}"
 EOF
 }
 
+# Fish-syntax equivalent of brew_env_macos.
+brew_env_macos_fish() {
+  cat <<EOF
+set -gx HOMEBREW_BREW_GIT_REMOTE "${BREW_GIT_REMOTE}"
+set -gx HOMEBREW_CORE_GIT_REMOTE "${BREW_CORE_GIT_REMOTE}"
+set -gx HOMEBREW_CASK_GIT_REMOTE "${BREW_CASK_GIT_REMOTE}"
+set -gx HOMEBREW_BOTTLE_DOMAIN "${BREW_BOTTLE_DOMAIN}"
+set -gx HOMEBREW_API_DOMAIN "${BREW_API_DOMAIN}"
+set -gx HOMEBREW_INSTALL_FROM_API 1
+EOF
+}
+
 platform_sudo_macos() {
   local target_user="$1" profile="${2:-server}"
 
@@ -685,12 +772,12 @@ platform_sudo_macos() {
 }
 
 platform_mirror_macos() {
-  local user="$1" profile
-  profile="$(user_home "${user}")/.zprofile"
-  write_marked_block "${profile}" 'cassius-brew-mirrors' "$(brew_env_macos)"
-  if [[ ${EUID} -eq 0 ]]; then
-    chown "${user}" "${profile}" 2>/dev/null || true
-  fi
+  local user="$1"
+  # Apply the macos brew mirror env across bash/zsh/fish conf.d (login +
+  # non-login), not just .zprofile.
+  write_user_env "${user}" 'cackle-brew-mirror' \
+    "$(brew_env_macos)" \
+    "$(brew_env_macos_fish)"
 }
 
 platform_packages_macos() {
@@ -847,10 +934,10 @@ platform_vmm_freebsd() {
   else
     warn "could not load vmm(4) — enable VT-x/AMD-V (BIOS) or nested virt"
   fi
-  write_marked_block /boot/loader.conf 'cassius-bhyve' 'vmm_load="YES"'
+  write_marked_block /boot/loader.conf 'cackle-bhyve' 'vmm_load="YES"'
 
   # Bring tap(4) interfaces up as soon as they are opened (needed by bridges).
-  write_marked_block /etc/sysctl.conf 'cassius-bhyve' 'net.link.tap.up_on_open=1'
+  write_marked_block /etc/sysctl.conf 'cackle-bhyve' 'net.link.tap.up_on_open=1'
   sysctl net.link.tap.up_on_open=1 2>/dev/null || true
 
   # Enable the vm rc service and initialize the VM directory (/vm).
