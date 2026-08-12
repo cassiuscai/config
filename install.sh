@@ -28,11 +28,14 @@
 #   --username  target user (flag > SUDO_USER > current user > interactive)
 #   --profile   'server' or 'client'; prompted interactively if not given:
 #               server — full setup incl. the virtualization stack (vmm)
-#               client — skip vmm (no local VM management); everything else
+#               client — skip vmm (no local VM management), passwordless sudo
 #
 # The virtualization step (vmm) is skipped for the 'client' profile on every
 # platform. On the server profile it installs libvirt/QEMU+libvirtd (Debian)
 # or bhyve/vm-bhyve (FreeBSD); macOS has no vmm step in either profile.
+#
+# The 'client' profile also grants the target user passwordless sudo
+# (NOPASSWD); 'server' keeps password-protected sudo.
 #
 # The target user (CLI arg > SUDO_USER > current user > interactive prompt)
 # gets sudo privileges and owns the Homebrew install. If prompted, the sole
@@ -65,6 +68,22 @@ NIX_INSTALL_URL='https://mirrors.bfsu.edu.cn/nix/latest/install'
 say()  { printf '\033[1;32m[install]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[install]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[install]\033[0m %s\n' "$*" >&2; exit 1; }
+
+# Interactive prompt. Reads from the controlling terminal (/dev/tty) when one
+# is available so prompts keep working even when stdin is a pipe (e.g. under
+# `curl ... | sudo bash`); falls back to stdin when there is no tty.
+prompt() {
+  local msg="$1" reply="" tty
+  printf '%s' "${msg}" >&2
+  if [[ -r /dev/tty ]]; then
+    if ! read -r reply < /dev/tty; then
+      return 1
+    fi
+  elif ! read -r reply; then
+    return 1
+  fi
+  printf '%s\n' "${reply}"
+}
 
 require_root() {
   if [[ ${EUID} -ne 0 ]]; then
@@ -163,7 +182,7 @@ resolve_target_user() {
     default="${candidates}"
   fi
 
-  if ! read -r -p "Enter the username to set up sudo and Homebrew for: [${default:-}] " entered; then
+  if ! entered="$(prompt "Enter the username to set up sudo and Homebrew for: [${default:-}] ")"; then
     die "no username entered"
   fi
   entered="${entered:-${default:-}}"
@@ -212,13 +231,14 @@ platform_requires_root() {
 
 run_platform_step() {
   local os="$1" step="$2" user="$3"
+  shift 3
   local fn="platform_${step}_${os}"
   if ! declare -F "${fn}" >/dev/null 2>&1; then
     warn "no '${fn}' handler for ${os} — skipping"
     return 0
   fi
   say "== ${os}: ${step} =="
-  "${fn}" "${user}"
+  "${fn}" "${user}" "$@"
 }
 
 # --- platform detection -----------------------------------------------------
@@ -270,10 +290,19 @@ detect_codename() {
 # sudo/wheel group rule in /etc/sudoers, this cannot silently break if that
 # group line is missing or malformed. The rule is validated with visudo before
 # being installed.
+# Grant <user> full sudo via an isolated sudoers.d rule. Unlike relying on the
+# sudo/wheel group rule in /etc/sudoers, this cannot silently break if that
+# group line is missing or malformed. The rule is validated with visudo before
+# being installed. Pass a second truthy arg for passwordless (NOPASSWD) sudo.
 grant_user_sudo() {
-  local user="$1"
+  local user="$1" nopasswd="${2:-0}"
   local rule_file="/etc/sudoers.d/${user}"
-  local rule="${user} ALL=(ALL:ALL) ALL"
+  local rule
+  if [[ "${nopasswd}" =~ ^(1|yes|true|NOPASSWD)$ ]]; then
+    rule="${user} ALL=(ALL:ALL) NOPASSWD:ALL"
+  else
+    rule="${user} ALL=(ALL:ALL) ALL"
+  fi
   if [[ -f "${rule_file}" ]] && grep -qF "${rule}" "${rule_file}"; then
     say "already configured: ${rule_file}"
     return 0
@@ -316,7 +345,7 @@ platform_bootstrap_debian() {
 }
 
 platform_sudo_debian() {
-  local target_user="$1"
+  local target_user="$1" profile="${2:-server}"
 
   if ! id -u "${target_user}" >/dev/null 2>&1; then
     die "user '${target_user}' does not exist"
@@ -325,7 +354,9 @@ platform_sudo_debian() {
     say "installing sudo ..."
     apt-get install -y sudo
   fi
-  grant_user_sudo "${target_user}"
+  nopasswd=0
+  [[ "${profile}" == "client" ]] && nopasswd=1
+  grant_user_sudo "${target_user}" "${nopasswd}"
   say "sudo ready for '${target_user}'"
 }
 
@@ -551,7 +582,7 @@ EOF
 }
 
 platform_sudo_macos() {
-  local target_user="$1"
+  local target_user="$1" profile="${2:-server}"
 
   if ! id -u "${target_user}" >/dev/null 2>&1; then
     die "user '${target_user}' does not exist"
@@ -563,6 +594,10 @@ platform_sudo_macos() {
   if ! dscl . -read /Groups/admin GroupMembership 2>/dev/null | grep -qw "${target_user}"; then
     say "granting admin (sudo) to '${target_user}' ..."
     dscl . -append /Groups/admin GroupMembership "${target_user}"
+  fi
+  # Client profile: passwordless sudo via an isolated sudoers.d rule.
+  if [[ "${profile}" == "client" ]]; then
+    grant_user_sudo "${target_user}" 1
   fi
   say "sudo ready for '${target_user}'"
 }
@@ -645,7 +680,7 @@ platform_bootstrap_freebsd() {
 }
 
 platform_sudo_freebsd() {
-  local target_user="$1"
+  local target_user="$1" profile="${2:-server}"
 
   if ! id -u "${target_user}" >/dev/null 2>&1; then
     die "user '${target_user}' does not exist"
@@ -657,6 +692,10 @@ platform_sudo_freebsd() {
   if ! id -nG "${target_user}" | grep -qw wheel; then
     say "granting sudo (wheel) to '${target_user}' ..."
     pw groupmod wheel -m "${target_user}"
+  fi
+  # Client profile: passwordless sudo via an isolated sudoers.d rule.
+  if [[ "${profile}" == "client" ]]; then
+    grant_user_sudo "${target_user}" 1
   fi
   say "sudo ready for '${target_user}'"
 }
@@ -759,7 +798,7 @@ Options:
                     resolved from SUDO_USER > current user > interactive prompt.
   --profile PROFILE Setup profile: 'server' or 'client'. If omitted, prompted.
                       server — full setup incl. the virtualization stack (vmm)
-                      client — skip vmm (no local VM management)
+                      client — skip vmm (no VM management), passwordless sudo
   -h, --help        Show this help and exit.
 
 Supported platforms: debian, macos, freebsd.
@@ -771,7 +810,7 @@ EOF
 prompt_profile() {
   local entered
   while true; do
-    if ! read -r -p "Select setup profile (server/client) [server]: " entered; then
+    if ! entered="$(prompt "Select setup profile (server/client) [server]: ")"; then
       die "no profile entered"
     fi
     entered="${entered:-server}"
@@ -849,7 +888,7 @@ main() {
   say "profile: ${profile}"
 
   run_platform_step "${os}" bootstrap "${target_user}"
-  run_platform_step "${os}" sudo "${target_user}"
+  run_platform_step "${os}" sudo "${target_user}" "${profile}"
   run_platform_step "${os}" ssh "${target_user}"
 
   # The mirror step gates the rest: if mirror setup fails, abort rather than

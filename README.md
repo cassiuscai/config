@@ -9,35 +9,57 @@ A single script that takes a fresh machine from stock to usable:
 - installs the **Nix** package manager (Linux: multi-user daemon, macOS: default)
 - initializes an **ed25519 SSH key** for the target user (if missing)
 - bootstraps **sudo** for the target user (minimal installs)
+- supports a **`server`/`client` profile**: `client` skips the virtualization
+  stack and grants passwordless sudo; `server` (default) installs everything
 
 ## One-line install
 
-No clone needed — pipe the script straight from GitHub:
+No clone needed — pipe the script straight from GitHub. Each platform has its
+own prerequisite step (bootstrap `curl`, `sudo`, etc. via its package
+manager) followed by the script itself. A single URL is shared:
 
-**Debian** — a minimal install ships with neither `curl` nor `sudo`, so
-bootstrap them first, then run the script. Run as root; `<username>` gets
-sudo + Homebrew + Nix:
-
-```sh
-apt-get update && apt-get install -y sudo curl \
-  && curl -fsSL https://raw.githubusercontent.com/cassiuscai/config/master/install.sh | sudo bash -s -- <username>
+```
+https://raw.githubusercontent.com/cassiuscai/config/master/install.sh
 ```
 
-On a machine that already has `curl` and `sudo` (or when the script has run
-before), just pipe it:
+### Debian
+
+**Step 1 — apt prerequisites** (only needed on a minimal install that lacks
+`curl`/`sudo`; skip if they're already present):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/cassiuscai/config/master/install.sh | sudo bash -s -- <username>
+apt-get update && apt-get install -y sudo curl
 ```
 
-**FreeBSD** — bootstrap `curl` and `sudo` with `pkg` first (same idea):
+**Step 2 — run the script as root**, replacing `<username>` and `<profile>`
+with your target user and one of `server` / `client`:
 
 ```sh
-pkg update -f && pkg install -y curl sudo \
-  && curl -fsSL https://raw.githubusercontent.com/cassiuscai/config/master/install.sh | bash -s -- <username>
+curl -fsSL https://raw.githubusercontent.com/cassiuscai/config/master/install.sh \
+  | sudo bash -s -- --username <username> --profile <profile>
 ```
 
-**macOS** — run as your own (admin) user; no sudo needed:
+If `curl` and `sudo` are already installed, step 1 can be omitted and you can
+pipe the script directly.
+
+### FreeBSD
+
+**Step 1 — pkg prerequisites** (minimal installs without `curl`/`sudo`):
+
+```sh
+pkg update -f && pkg install -y curl sudo
+```
+
+**Step 2 — run the script as root:**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/cassiuscai/config/master/install.sh \
+  | bash -s -- --username <username> --profile <profile>
+```
+
+### macOS
+
+Run as your own (admin) user; no sudo or prerequisites needed:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/cassiuscai/config/master/install.sh | bash
@@ -46,10 +68,13 @@ curl -fsSL https://raw.githubusercontent.com/cassiuscai/config/master/install.sh
 > The script uses bash features (arrays, `[[ ]]`), so pipe it to **`bash`** —
 > not `sh` (on Debian `sh` is dash and will fail).
 >
-> The username is optional: without one, the target user is resolved from
-> `$SUDO_USER` (when run via `sudo`) or the current user (macOS). The
-> interactive prompt only appears when running as root with no sudo context —
-> in that case a piped install can't prompt, so pass a username explicitly.
+> Both `--username` and `--profile` are optional:
+> - `--username`: without it, the target user is resolved from `$SUDO_USER`
+>   (when run via `sudo`) or the current user (macOS).
+> - `--profile` (`server`|`client`): without it, the script prompts. A piped
+>   (non-tty) install can't prompt, so pass `--profile <value>` explicitly
+>   when using `curl | bash`. When it can't prompt for a username either,
+>   pass both flags.
 
 ## Supported platforms
 
@@ -66,27 +91,50 @@ curl -fsSL https://raw.githubusercontent.com/cassiuscai/config/master/install.sh
 
 ```sh
 # Debian / FreeBSD — run as root (directly, or via sudo)
-sudo ./install.sh [username]
+sudo ./install.sh [--username USER] [--profile server|client]
 
 # macOS — run as your own (admin) user; no sudo needed
-./install.sh [username]
+./install.sh [--username USER] [--profile server|client]
 ```
 
 On a minimal Debian/FreeBSD install without `curl` or `sudo`, run directly as
 root — the script installs both itself:
 
 ```sh
-./install.sh [username]
+./install.sh [--username USER] [--profile server|client]
 ```
 
 The target user is chosen in this order:
 
-1. the command-line argument, if given
+1. `--username`, if given
 2. `$SUDO_USER` — the user who invoked `sudo`
 3. the current user (macOS / direct non-root run)
 4. an interactive prompt (root with no sudo context) — the sole login user is suggested
 
 That user gets sudo privileges and owns the Homebrew/Linuxbrew install.
+
+If `--profile` is not given, the script prompts to select a profile
+(`server` or `client`, `server` is the default).
+
+## Profiles
+
+The `--profile` flag selects between two setup profiles, supported on every
+platform:
+
+| Profile | Virtualization (vmm)          | sudo for target user            |
+|---------|-------------------------------|---------------------------------|
+| `server`| Installed                           | password-protected              |
+| `client`| Skipped (no VM management)    | passwordless (`NOPASSWD:ALL`)   |
+
+- **`server`** (default) — full setup: packages, Homebrew, Nix, and the
+  virtualization stack (libvirt/QEMU+KVM on Debian, bhyve/vm-bhyve on
+  FreeBSD). sudo keeps the normal password prompt.
+- **`client`** — a workstation/virtual-machine guest with no local VMs: skips
+  the `vmm` step on all platforms (macOS has none anyway) and grants the
+  target user passwordless sudo.
+
+All non-vmm steps (mirrors, packages, Homebrew, Nix, SSH key) run identically
+in both profiles.
 
 ## What happens per platform
 
@@ -99,13 +147,14 @@ the BFSU brew installer (git/bottle/API mirrors all point at
 installs Nix in multi-user daemon mode:
 `curl ... https://mirrors.bfsu.edu.cn/nix/latest/install | sh -s -- --daemon`.
 
-Then it sets up the **vmm** stack — libvirt/QEMU with KVM acceleration:
-`libvirt-daemon-system`, `libvirt-clients`, `virtinst`, `qemu-system-x86`,
-`qemu-utils`. It enables the `libvirtd` service, adds the user to the
-`libvirt` and `kvm` groups, and starts libvirt's default NAT network — so
-`virsh` and `virt-install` work out of the box on a headless server (no GUI
-tools are installed). If `/dev/kvm` is missing, a warning is printed and VMs
-fall back to software emulation.
+Then it sets up the **vmm** stack — libvirt/QEMU with KVM acceleration
+(`server` profile only): `libvirt-daemon-system`, `libvirt-clients`,
+`virtinst`, `qemu-system-x86`, `qemu-utils`. It enables the `libvirtd`
+service, adds the user to the `libvirt` and `kvm` groups, and starts libvirt's
+default NAT network — so `virsh` and `virt-install` work out of the box on a
+headless server (no GUI tools are installed). If `/dev/kvm` is missing, a
+warning is printed and VMs fall back to software emulation. The `client`
+profile skips this step and grants the user passwordless sudo instead.
 
 **macOS** — writes the `HOMEBREW_*` BFSU mirror exports into `~/.zprofile`,
 installs Homebrew (if missing) from the cloned BFSU installer, then
